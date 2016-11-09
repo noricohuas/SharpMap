@@ -5,7 +5,9 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using Common.Logging;
 using SharpMap.Layers;
+using SharpMap.Styles;
 
 namespace SharpMap.Rendering
 {
@@ -14,6 +16,8 @@ namespace SharpMap.Rendering
     /// </summary>
     public class LayerCollectionRenderer : IDisposable
     {
+        private static readonly ILog Logger = LogManager.GetLogger<LayerCollectionRenderer>();
+
         private readonly ILayer[] _layers;
         private Map _map;
 
@@ -36,13 +40,14 @@ namespace SharpMap.Rendering
         /// </summary>
         /// <param name="g">The graphics object</param>
         /// <param name="map">The map</param>
+        /// <param name="allowParallel"></param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public void Render(Graphics g, Map map)
+        public void Render(Graphics g, Map map, bool allowParallel)
         {
             _map = map;
             _transform = _map.MapTransform;
             g.PageUnit = GraphicsUnit.Pixel;
-            if (AllowParallel && ParallelHeuristic(map.Size, g.DpiX, _layers.Length))
+            if (AllowParallel && allowParallel && ParallelHeuristic(map.Size, g.DpiX, _layers.Length))
             {
                 RenderParellel(g);
             }
@@ -85,9 +90,10 @@ namespace SharpMap.Rendering
                 var layer = _layers[layerIndex];
                 if (layer.Enabled)
                 {
-                    if (layer.MaxVisible >= _map.Zoom && layer.MinVisible < _map.Zoom)
+                    double compare = layer.VisibilityUnits == VisibilityUnits.ZoomLevel ? _map.Zoom : _map.MapScale;
+                    if (layer.MaxVisible >= compare && layer.MinVisible < compare)
                     {
-                        layer.Render(g, _map);
+                        RenderLayer(layer, g, _map);
                     }
                 }
             }
@@ -121,9 +127,11 @@ namespace SharpMap.Rendering
                 return;
 
             var layer = _layers[layerIndex];
+            
             if (layer.Enabled)
             {
-                if (layer.MaxVisible >= _map.Zoom && layer.MinVisible < _map.Zoom)
+                double compare = layer.VisibilityUnits == VisibilityUnits.ZoomLevel ? _map.Zoom : _map.MapScale;
+                if (layer.MaxVisible >= compare && layer.MinVisible < compare)
                 {
                     var image = _images[layerIndex] = new Bitmap(_map.Size.Width, _map.Size.Height, PixelFormat.Format32bppArgb);
                     using (var g = Graphics.FromImage(image))
@@ -132,9 +140,37 @@ namespace SharpMap.Rendering
                         ApplyTransform(_transform, g);
 
                         g.Clear(Color.Transparent);
-                        layer.Render(g, _map);
+                        RenderLayer(layer, g, _map);
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Invokes the rendering of the layer, a red X is drawn if it fails.
+        /// </summary>
+        /// <param name="layer"></param>
+        /// <param name="g"></param>
+        /// <param name="map"></param>
+        public static void RenderLayer(ILayer layer, Graphics g, Map map)
+        {
+            try
+            {
+                layer.Render(g, map);
+            }
+            catch (Exception e)
+            {
+                Logger.Error(e.Message, e);
+
+                using (var pen = new Pen(Color.Red, 4f))
+                {
+                    var size = map.Size;
+
+                    g.DrawLine(pen, 0, 0, size.Width, size.Height);
+                    g.DrawLine(pen, size.Width,0, 0, size.Height);
+                    g.DrawRectangle(pen, 0, 0, size.Width, size.Height);
+                }
+                
             }
         }
 

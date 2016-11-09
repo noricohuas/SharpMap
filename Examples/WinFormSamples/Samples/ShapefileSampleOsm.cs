@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Timers;
-using GeoAPI.Features;
 using SharpMap;
 using SharpMap.Data;
 using SharpMap.Data.Providers;
@@ -27,7 +26,7 @@ namespace WinFormSamples.Samples
         //Could have used SharpMap.Rendering.Thematics.CustomTheme,
         //but that one does not perserve styles for fast retrieval.
         //Maybe a category theme would be a good idea...
-        private delegate IStyle GetStyleHandler(IFeature row);
+        private delegate IStyle GetStyleHandler(FeatureDataRow row);
         class ThemeViaDelegate : ITheme
         {
             public GetStyleHandler GetStyleFunction;
@@ -45,15 +44,15 @@ namespace WinFormSamples.Samples
 
             #region Implementation of ITheme
 
-            public IStyle GetStyle(IFeature feature)
+            public IStyle GetStyle(FeatureDataRow attribute)
             {
                 IStyle returnStyle;
-                String value = Convert.ToString(feature.Attributes[_columnName]);
+                String value = Convert.ToString(attribute[_columnName]);
                 if (!_stylePreserver.TryGetValue(value, out returnStyle))
                 {
                     if (GetStyleFunction != null)
                     {
-                        returnStyle = GetStyleFunction(feature);
+                        returnStyle = GetStyleFunction(attribute);
                         if (returnStyle == null) returnStyle = _default;
                         _stylePreserver.Add(value, returnStyle);
                     }
@@ -100,12 +99,12 @@ namespace WinFormSamples.Samples
             layNatural.Style = transparentStyle;
             //Set theme
             ThemeViaDelegate theme = new ThemeViaDelegate(layNatural.Style, "type");
-            theme.GetStyleFunction = delegate(IFeature row)
+            theme.GetStyleFunction = delegate(FeatureDataRow row)
                                          {
-                                             string caseVal = (String) row.Attributes["type"];
+                                             string caseVal = (String)row["type"];
                                              caseVal = caseVal.ToLowerInvariant();
                                              VectorStyle returnStyle = new VectorStyle();
-                                             
+
                                              switch (caseVal)
                                              {
                                                  case "forest":
@@ -144,11 +143,11 @@ namespace WinFormSamples.Samples
             //layRoads.DataSource.Close();
             layRoads.Style = transparentStyle;
             ThemeViaDelegate themeRoads = new ThemeViaDelegate(transparentStyle, "type");
-            themeRoads.GetStyleFunction = delegate(IFeature row)
+            themeRoads.GetStyleFunction = delegate(FeatureDataRow row)
                                               {
                                                   VectorStyle returnStyle = new VectorStyle();
 
-                                                  switch ((String)row.Attributes["type"])
+                                                  switch ((String)row["type"])
                                                   {
                                                       case "rail":
                                                           returnStyle.Fill = Brushes.White;
@@ -225,7 +224,7 @@ namespace WinFormSamples.Samples
             VectorLayer layRail = new VectorLayer("Railways");
             layRail.DataSource = new ShapeFile(string.Format("{0}/railways.shp", PathOsm)) { Encoding = encoding };
             layRail.Style.Line.Brush = Brushes.White;
-            layRail.Style.Line.DashPattern = new float[] {4f, 4f};//;System.Drawing.Drawing2D.DashStyle.Dash;
+            layRail.Style.Line.DashPattern = new float[] { 4f, 4f };//;System.Drawing.Drawing2D.DashStyle.Dash;
             layRail.Style.Line.Width = 4;
             layRail.Style.EnableOutline = true;
             layRail.Style.Outline.Brush = Brushes.Black;
@@ -236,13 +235,13 @@ namespace WinFormSamples.Samples
             layWaterways.DataSource = new ShapeFile(string.Format("{0}/waterways.shp", PathOsm)) { Encoding = encoding };
             layRoads.Style = transparentStyle;
             ThemeViaDelegate themeWater = new ThemeViaDelegate(transparentStyle, "type");
-            themeWater.GetStyleFunction = delegate(IFeature row)
+            themeWater.GetStyleFunction = delegate(FeatureDataRow row)
             {
                 VectorStyle returnStyle = new VectorStyle();
                 returnStyle.Line.Brush = Brushes.Aqua;
                 returnStyle.EnableOutline = true;
                 Int32 lineWidth = 1;
-                switch ((String)row.Attributes["type"])
+                switch ((String)row["type"])
                 {
                     case "canal":
                     case "derelict_canal":
@@ -270,30 +269,30 @@ namespace WinFormSamples.Samples
             layPoints.DataSource = new ShapeFile(string.Format("{0}/points.shp", PathOsm)) { Encoding = encoding };
             layPoints.Style = transparentStyle2;
             ThemeViaDelegate themePoints = new ThemeViaDelegate(transparentStyle2, "type");
-            themePoints.GetStyleFunction = delegate(IFeature row)
+            themePoints.GetStyleFunction = delegate(FeatureDataRow row)
             {
                 VectorStyle returnStyle = new VectorStyle();
-                switch ((String)row.Attributes["type"])
+                switch ((String)row["type"])
                 {
                     case "bank":
                         returnStyle.Symbol = new Bitmap("Images/Bank.gif");
                         break;
                     case "hospital":
-                        returnStyle.Symbol = new Bitmap("Images/medical-facility.gif");
+                        returnStyle.Symbol = new Bitmap("Images/Medical-Facility.gif");
                         break;
                     case "hotel":
-                        returnStyle.Symbol = new Bitmap("Images/hotel.gif");
+                        returnStyle.Symbol = new Bitmap("Images/Hotel.gif");
                         break;
                     case "restaurant":
                     case "fast-food":
-                        returnStyle.Symbol = new Bitmap("Images/restaurant.gif");
+                        returnStyle.Symbol = new Bitmap("Images/Restaurant.gif");
                         break;
                     case "parking":
-                        returnStyle.Symbol = new Bitmap("Images/car.gif");
+                        returnStyle.Symbol = new Bitmap("Images/Car.gif");
                         break;
                     default:
-                        Bitmap tmp = new Bitmap(1,1);
-                        tmp.SetPixel(0,0, Color.Transparent);
+                        Bitmap tmp = new Bitmap(1, 1);
+                        tmp.SetPixel(0, 0, Color.Transparent);
                         returnStyle.Symbol = tmp;
                         break;
                 }
@@ -305,6 +304,19 @@ namespace WinFormSamples.Samples
             var layLabel = new LabelLayer("Road Labels");
             layLabel.DataSource = layRoads.DataSource;
             layLabel.LabelColumn = "Name";
+            layLabel.Theme = new SharpMap.Rendering.Thematics.FontSizeTheme(layLabel, map)
+            {
+                MinFontSize = 4,
+                FontSizeScale = 1
+            };
+            var layLabelN = new LabelLayer("Natural Labels");
+            layLabelN.DataSource = layNatural.DataSource;
+            layLabelN.LabelColumn = "type";
+            layLabelN.Theme = new FontSizeTheme(layLabelN, map)
+            {
+                MinFontSize = 4,
+                FontSizeScale = 5
+            };
 
             //Add layers to Map
             map.Layers.Add(layNatural);
@@ -313,11 +325,14 @@ namespace WinFormSamples.Samples
             map.Layers.Add(layRoads);
             map.Layers.Add(layPoints);
             map.Layers.Add(layLabel);
+            map.Layers.Add(layLabelN);
 
             ShapeProvider sp = new ShapeProvider(string.Format("{0}/obepath.shp", PathOsm)) { Encoding = encoding };
             VectorLayer vl = new VectorLayer("obepath", sp);
             vl.SRID = 31466;
-            vl.Style.Symbol = new Bitmap("Images/car.gif");
+            var bmp = new Bitmap("Images/Car.gif");
+            bmp.MakeTransparent(bmp.GetPixel(0, 0));
+            vl.Style.Symbol = bmp;
 
             VariableLayerCollection.Interval = 500;
             map.VariableLayers.Add(vl);
@@ -329,12 +344,12 @@ namespace WinFormSamples.Samples
 
             var disclaimer = new Disclaimer
                 {
-                    Font = new Font("Arial", 7f, FontStyle.Italic),
+                    Font = new Font(FontFamily.GenericSansSerif, 7f, FontStyle.Italic),
                     Text = "Geodata from OpenStreetMap (CC-by-SA)\nTransformed to Shapefile by geofabrik.de",
                     Anchor = MapDecorationAnchor.CenterBottom
                 };
             map.Decorations.Add(disclaimer);
-            transparentStyle2.MaxVisible = map.MaximumZoom*0.3;
+            transparentStyle2.MaxVisible = map.MaximumZoom * 0.3;
 
             Matrix mat = new Matrix();
             mat.RotateAt(angle, map.WorldToImage(map.Center));
@@ -370,9 +385,9 @@ namespace WinFormSamples.Samples
                 if (_id == _modValue) _id = 0;
             }
 
-            bool Filter(IFeature fdr)
+            bool Filter(FeatureDataRow fdr)
             {
-                return Convert.ToInt32(fdr.Attributes[0]) == _id;
+                return Convert.ToInt32(fdr[0]) == _id;
             }
 
         }

@@ -18,16 +18,14 @@
 // along with SharpMap; if not, write to the Free Software
 // Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 
-using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Data;
-using System.Globalization;
-using System.Threading;
-using GeoAPI.Features;
 using GeoAPI.Geometries;
 using Oracle.DataAccess.Client;
 using SharpMap.Data.Providers.OracleUDT;
+using System;
+using System.Collections.ObjectModel;
+using System.Data;
+using System.Globalization;
+using Geometry = GeoAPI.Geometries.IGeometry;
 
 namespace SharpMap.Data.Providers
 {
@@ -161,8 +159,9 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="bbox"></param>
         /// <returns></returns>
-        public override IEnumerable<IGeometry> GetGeometriesInView(Envelope bbox, CancellationToken? cancellationToken = null)
+        public override Collection<Geometry> GetGeometriesInView(Envelope bbox)
         {
+            var features = new Collection<Geometry>();
             using (var conn = new OracleConnection(ConnectionString))
             {
                 //Get bounding box string
@@ -188,13 +187,14 @@ namespace SharpMap.Data.Providers
                             {
                                 var geom = dr[0] as SdoGeometry;
                                 if (geom != null)
-                                    yield return geom.AsGeometry();
+                                    features.Add(geom.AsGeometry());
                             }
                         }
                     }
                     conn.Close();
                 }
             }
+            return features;
         }
 
         /// <summary>
@@ -202,16 +202,16 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="oid">Object ID</param>
         /// <returns>geometry</returns>
-        public override IGeometry GetGeometryByOid(object oid)
+        public override Geometry GetGeometryByID(uint oid)
         {
+            Geometry geom = null;
             using (var conn = new OracleConnection(ConnectionString))
             {
                 string strSql = "SELECT g." + GeometryColumn + " as Geom FROM " + Table + " g WHERE " + ObjectIdColumn +
-                                "=:POid";
+                                "='" + oid.ToString(CultureInfo.InvariantCulture) + "'";
                 conn.Open();
                 using (var command = new OracleCommand(strSql, conn))
                 {
-                    command.Parameters.Add("POid", oid);
                     using (OracleDataReader dr = command.ExecuteReader())
                     {
                         while (dr.Read())
@@ -220,29 +220,30 @@ namespace SharpMap.Data.Providers
                             {
                                 var sdoGeom = dr[0] as SdoGeometry;
                                 if (sdoGeom != null)
-                                    return sdoGeom.AsGeometry();
+                                    geom = sdoGeom.AsGeometry();
                             }
                         }
                     }
                 }
                 conn.Close();
             }
-            return null;
+            return geom;
         }
 
         /// <summary>
         /// Returns geometry Object IDs whose bounding box intersects 'bbox'
         /// </summary>
-        /// <param name="view"></param>
+        /// <param name="bbox"></param>
         /// <returns></returns>
-        public override IEnumerable<object> GetOidsInView(Envelope view, CancellationToken? cancellationToken = null)
+        public override Collection<uint> GetObjectIDsInView(Envelope bbox)
         {
+            var objectlist = new Collection<uint>();
             using (var conn = new OracleConnection(ConnectionString))
             {
                 //Get bounding box string
-                var strBbox = GetBoxFilterStr(view);
+                string strBbox = GetBoxFilterStr(bbox);
 
-                var strSql = "SELECT g." + ObjectIdColumn + " ";
+                string strSql = "SELECT g." + ObjectIdColumn + " ";
                 strSql += "FROM " + Table + " g WHERE ";
 
                 if (!String.IsNullOrEmpty(_definitionQuery))
@@ -259,13 +260,15 @@ namespace SharpMap.Data.Providers
                         {
                             if (dr[0] != DBNull.Value)
                             {
-                                yield return dr[0];
+                                var id = (uint)(decimal)dr[0];
+                                objectlist.Add(id);
                             }
                         }
                     }
                     conn.Close();
                 }
             }
+            return objectlist;
         }
 
         /// <summary>
@@ -273,7 +276,7 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="geom"></param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        protected override void OnExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet fcs, CancellationToken? cancellationToken=null)
+        protected override void OnExecuteIntersectionQuery(Geometry geom, FeatureDataSet ds)
         {
             using (var conn = new OracleConnection(ConnectionString))
             {
@@ -292,34 +295,36 @@ namespace SharpMap.Data.Providers
 
                 strSql += strGeom;
 
-                var ds = (DataSet) new FeatureDataSet();
                 using (var adapter = new OracleDataAdapter(strSql, conn))
                 {
-                    conn.Open();
-                    adapter.Fill(ds);
-                    conn.Close();
-                    if (ds.Tables.Count > 0)
+                    using (var sourceDataSet = new DataSet())
                     {
-                        var fdt = new FeatureDataTable(ds.Tables[0]);
-                        foreach (DataColumn col in ds.Tables[0].Columns)
-                            if (string.Compare(col.ColumnName, GeometryColumn, CultureInfo.InvariantCulture, CompareOptions.OrdinalIgnoreCase) != 0)
-                                fdt.Columns.Add(col.ColumnName, col.DataType, col.Expression);
-                        foreach (DataRow dr in ds.Tables[0].Rows)
+                        conn.Open();
+                        adapter.Fill(sourceDataSet);
+                        conn.Close();
+                        if (sourceDataSet.Tables.Count > 0)
                         {
-                            var fdr = fdt.NewRow();
-                            foreach (DataColumn col in ds.Tables[0].Columns)
+                            var fdt = new FeatureDataTable(sourceDataSet.Tables[0]);
+                            foreach (DataColumn col in sourceDataSet.Tables[0].Columns)
                                 if (string.Compare(col.ColumnName, GeometryColumn, CultureInfo.InvariantCulture, CompareOptions.OrdinalIgnoreCase) != 0)
-                                    fdr[col.ColumnName] = dr[col];
-                            var sdoGeometry = dr[GeometryColumn] as SdoGeometry;
-
-                            if (sdoGeometry != null)
+                                    fdt.Columns.Add(col.ColumnName, col.DataType, col.Expression);
+                            foreach (DataRow dr in sourceDataSet.Tables[0].Rows)
                             {
-                                fdr.Geometry = sdoGeometry.AsGeometry();
-                            }
+                                var fdr = fdt.NewRow();
+                                foreach (DataColumn col in sourceDataSet.Tables[0].Columns)
+                                    if (string.Compare(col.ColumnName, GeometryColumn, CultureInfo.InvariantCulture, CompareOptions.OrdinalIgnoreCase) != 0)
+                                        fdr[col.ColumnName] = dr[col];
+                                var sdoGeometry = dr[GeometryColumn] as SdoGeometry;
 
-                            fdt.AddRow(fdr);
+                                if (sdoGeometry != null)
+                                {
+                                    fdr.Geometry = sdoGeometry.AsGeometry();
+                                }
+
+                                fdt.AddRow(fdr);
+                            }
+                            ds.Tables.Add(fdt);
                         }
-                        ds.Tables.Add(fdt);
                     }
                 }
             }
@@ -347,32 +352,32 @@ namespace SharpMap.Data.Providers
         /// <summary>
         /// Returns a datarow based on a RowID
         /// </summary>
-        /// <param name="oid"></param>
+        /// <param name="rowId"></param>
         /// <returns>datarow</returns>
-        public override IFeature GetFeatureByOid(object oid)
+        public override FeatureDataRow GetFeature(uint rowId)
         {
             using (var conn = new OracleConnection(ConnectionString))
             {
                 string strSql = "select * from " +
-                                Table + " g WHERE " + ObjectIdColumn + "=:POid'";
+                                Table + " g WHERE " + ObjectIdColumn + "='" + rowId.ToString(NumberFormatInfo.InvariantInfo) + "'";
                 using (var adapter = new OracleDataAdapter(strSql, conn))
                 {
-                    adapter.SelectCommand.Parameters.Add("POid", oid);
-                    var ds = (DataSet)new FeatureDataSet();
+                    var sourceDataset = new DataSet();
                     conn.Open();
-                    adapter.Fill(ds);
+                    adapter.Fill(sourceDataset);
                     conn.Close();
-                    if (ds.Tables.Count > 0)
+                    if (sourceDataset.Tables.Count > 0)
                     {
-                        var fdt = new FeatureDataTable(ds.Tables[0]);
-                        foreach (DataColumn col in ds.Tables[0].Columns)
+                        var fdt = new FeatureDataTable(sourceDataset.Tables[0]);
+                        foreach (DataColumn col in sourceDataset.Tables[0].Columns)
                             if (string.Compare(col.ColumnName, GeometryColumn,CultureInfo.InvariantCulture, CompareOptions.OrdinalIgnoreCase) != 0)
                                 fdt.Columns.Add(col.ColumnName, col.DataType, col.Expression);
-                        if (ds.Tables[0].Rows.Count > 0)
+
+                        if (sourceDataset.Tables[0].Rows.Count > 0)
                         {
-                            DataRow dr = ds.Tables[0].Rows[0];
+                            DataRow dr = sourceDataset.Tables[0].Rows[0];
                             var fdr = fdt.NewRow();
-                            foreach (DataColumn col in ds.Tables[0].Columns)
+                            foreach (DataColumn col in sourceDataset.Tables[0].Columns)
                                 if (string.Compare(col.ColumnName, GeometryColumn, CultureInfo.InvariantCulture, CompareOptions.OrdinalIgnoreCase) != 0)
                                     fdr[col.ColumnName] = dr[col];
 
@@ -418,8 +423,8 @@ namespace SharpMap.Data.Providers
         /// Returns all features with the view box
         /// </summary>
         /// <param name="bbox">view box</param>
-        /// <param name="fcs">FeatureCollectionSet to fill data into</param>
-        public override void ExecuteIntersectionQuery(Envelope bbox, IFeatureCollectionSet fcs, CancellationToken? cancellationToken=null)
+        /// <param name="ds">FeatureDataSet to fill data into</param>
+        public override void ExecuteIntersectionQuery(Envelope bbox, FeatureDataSet ds)
         {
             using (var conn = new OracleConnection(ConnectionString))
             {
@@ -459,7 +464,7 @@ namespace SharpMap.Data.Providers
 
                             fdt.AddRow(fdr);
                         }
-                        fcs.Add(fdt);
+                        ds.Tables.Add(fdt);
                     }
                 }
             }
@@ -505,6 +510,17 @@ namespace SharpMap.Data.Providers
                     throw new ApplicationException("Table '" + Table + "' does not contain a geometry column");
                 return (string)columnname;
             }
+        }
+
+        /// <summary>
+        /// Returns all features with the view box
+        /// </summary>
+        /// <param name="bbox">view box</param>
+        /// <param name="ds">FeatureDataSet to fill data into</param>
+        [Obsolete("Use ExecuteIntersectionQuery(box) instead")]
+        public void GetFeaturesInView(Envelope bbox, FeatureDataSet ds)
+        {
+            ExecuteIntersectionQuery(bbox, ds);
         }
     }
 }

@@ -18,12 +18,14 @@ namespace UnitTests.Data.Providers
             GeoAPI.GeometryServiceProvider.Instance = new NetTopologySuite.NtsGeometryServices();
         }
 
-        [NUnit.Framework.Test()]
-        public void VerifySchemaDetection()
+        [NUnit.Framework.TestCase("[sde].[gisadmin.di]", "sde", "gisadmin.di")]
+        [NUnit.Framework.TestCase("[sde.gisadmin].[di]", "sde.gisadmin", "di")]
+        [NUnit.Framework.TestCase("sde.gisadmin.di", "sde.gisadmin", "di")]
+        public void VerifySchemaDetection(string schemaTable, string tableSchema, string table)
         {
-            SharpMap.Data.Providers.SqlServer2008 sq = new SharpMap.Data.Providers.SqlServer2008("", "schema.TableName", "oidcolumn");
-            Assert.AreEqual("schema", sq.TableSchema);
-            Assert.AreEqual("TableName", sq.Table);
+            SharpMap.Data.Providers.SqlServer2008 sq = new SharpMap.Data.Providers.SqlServer2008("", schemaTable, "oidcolumn");
+            Assert.AreEqual(tableSchema, sq.TableSchema);
+            Assert.AreEqual(table, sq.Table);
             Assert.AreEqual("oidcolumn", sq.ObjectIdColumn);
         }
     }
@@ -58,7 +60,7 @@ namespace UnitTests.Data.Providers
                 conn.Open();
                 using(SqlCommand cmd = conn.CreateCommand())
                 {
-                    // The ID column cannot simply be int, because that would cause GetOidsInView to fail. The provider internally works with uint
+                    // The ID column cannot simply be int, because that would cause GetObjectIDsInView to fail. The provider internally works with uint
                     cmd.CommandText = "CREATE TABLE roads_ugl(ID decimal(10,0) identity(1,1) PRIMARY KEY, NAME nvarchar(100), GEOM geometry)";
                     cmd.ExecuteNonQuery();
                 }
@@ -68,20 +70,20 @@ namespace UnitTests.Data.Providers
                 {
                     shapeFile.Open();
 
-                    IEnumerable<uint> indexes = shapeFile.GetOidsInView(shapeFile.GetExtents());
+                    IEnumerable<uint> indexes = shapeFile.GetObjectIDsInView(shapeFile.GetExtents());
 
                     indexes = indexes.Take(100);
 
                     foreach (uint idx in indexes)
                     {
-                        var feature = shapeFile.GetFeatureByOid(idx);
+                        SharpMap.Data.FeatureDataRow feature = shapeFile.GetFeature(idx);
 
                         using (SqlCommand cmd = conn.CreateCommand())
                         {
                             cmd.CommandText = "INSERT INTO roads_ugl(NAME, GEOM) VALUES (@Name, geometry::STGeomFromText(@Geom, @Srid))";
 
                             cmd.Parameters.AddWithValue("@Geom", feature.Geometry.AsText());
-                            cmd.Parameters.AddWithValue("@Name", feature.Attributes["NAME"]);
+                            cmd.Parameters.AddWithValue("@Name", feature["NAME"]);
                             cmd.Parameters.AddWithValue("@Srid", shapeFile.SRID);
                             cmd.ExecuteNonQuery();
                         }
@@ -191,7 +193,7 @@ namespace UnitTests.Data.Providers
             var geometries = sq.GetGeometriesInView(GetTestEnvelope());
 
             Assert.IsNotNull(geometries);
-            Assert.AreEqual(100, geometries.Count());
+            Assert.AreEqual(100, geometries.Count);
         }
 
         [NUnit.Framework.Test()]
@@ -204,7 +206,7 @@ namespace UnitTests.Data.Providers
             var geometries = sq.GetGeometriesInView(GetTestEnvelope());
 
             Assert.IsNotNull(geometries);
-            Assert.LessOrEqual(geometries.Count(), 100);
+            Assert.LessOrEqual(geometries.Count, 100);
         }
 
         [NUnit.Framework.Test()]
@@ -216,7 +218,7 @@ namespace UnitTests.Data.Providers
             var geometries = sq.GetGeometriesInView(GetTestEnvelope());
 
             Assert.IsNotNull(geometries);
-            Assert.AreEqual(100, geometries.Count());
+            Assert.AreEqual(100, geometries.Count);
         }
 
         [NUnit.Framework.Test()]
@@ -228,7 +230,7 @@ namespace UnitTests.Data.Providers
             var geometries = sq.GetGeometriesInView(GetTestEnvelope());
 
             Assert.IsNotNull(geometries);
-            Assert.AreEqual(100, geometries.Count());
+            Assert.AreEqual(100, geometries.Count);
         }
 
         [NUnit.Framework.Test()]
@@ -240,7 +242,7 @@ namespace UnitTests.Data.Providers
             var geometries = sq.GetGeometriesInView(GetTestEnvelope());
 
             Assert.IsNotNull(geometries);
-            Assert.AreEqual(100, geometries.Count());
+            Assert.AreEqual(100, geometries.Count);
         }
 
         [NUnit.Framework.Test()]
@@ -254,7 +256,7 @@ namespace UnitTests.Data.Providers
             var geometries = sq.GetGeometriesInView(GetTestEnvelope());
 
             Assert.IsNotNull(geometries);
-            Assert.AreEqual(100, geometries.Count());
+            Assert.AreEqual(100, geometries.Count);
         }
 
         [NUnit.Framework.Test()]
@@ -271,7 +273,7 @@ namespace UnitTests.Data.Providers
             var geometries = sq.GetGeometriesInView(GetTestEnvelope());
 
             Assert.IsNotNull(geometries);
-            Assert.AreEqual(100, geometries.Count());
+            Assert.AreEqual(100, geometries.Count);
         }
 
         [NUnit.Framework.Test()]
@@ -279,10 +281,10 @@ namespace UnitTests.Data.Providers
         {
             SharpMap.Data.Providers.SqlServer2008 sq = GetTestProvider();
 
-            var objectIds = sq.GetOidsInView(GetTestEnvelope());
+            var objectIds = sq.GetObjectIDsInView(GetTestEnvelope());
 
             Assert.IsNotNull(objectIds);
-            Assert.AreEqual(100, objectIds.Count());
+            Assert.AreEqual(100, objectIds.Count);
         }
 
         [NUnit.Framework.Test()]
@@ -340,7 +342,7 @@ namespace UnitTests.Data.Providers
         {
             SharpMap.Data.Providers.SqlServer2008 sq = GetTestProvider();
 
-            var feature = sq.GetFeatureByOid(1);
+            var feature = sq.GetFeature(1);
 
             Assert.IsNotNull(feature);
         }
@@ -350,7 +352,7 @@ namespace UnitTests.Data.Providers
         {
             SharpMap.Data.Providers.SqlServer2008 sq = GetTestProvider();
 
-            var feature = sq.GetFeatureByOid(99999999);
+            var feature = sq.GetFeature(99999999);
 
             Assert.IsNull(feature);
         }

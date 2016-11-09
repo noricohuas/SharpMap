@@ -1,62 +1,70 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using GeoAPI.CoordinateSystems.Transformations;
-using NetTopologySuite.Geometries;
-using SharpMap.Converters.GeoJSON;
-using SharpMap.Data;
-using SharpMap.Layers;
-using SharpMap.Web.Wms.Exceptions;
-using SharpMap.Web.Wms.Server;
-using SharpMap.Web.Wms.Server.Handlers;
-
 namespace SharpMap.Demo.Wms.Handlers
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
+    using System.IO;
+    using System.Linq;
+    using System.Web;
+
+    using NetTopologySuite.Geometries;
+
+    using GeoAPI.CoordinateSystems.Transformations;
+
+    using SharpMap.Converters.GeoJSON;
+    using SharpMap.Data;
+    using SharpMap.Layers;
+    using SharpMap.Web.Wms;
+
     using Geometry = GeoAPI.Geometries.IGeometry;
     using BoundingBox = GeoAPI.Geometries.Envelope;
 
     public class StdJsonMapHandler : AbstractStdMapHandler
     {
-        public override void ProcessRequest(IContext context)
+        public override void ProcessRequest(HttpContext context)
         {
-            IContextRequest request = context.Request;
-            IContextResponse response = context.Response;
             try
             {
-                string s = request.GetParam("BBOX");
+                string s = context.Request.Params["BBOX"];
                 if (String.IsNullOrEmpty(s))
-                    throw new WmsInvalidParameterException("BBOX");
-
-
-                Map map = GetMap(request);
-                LayerCollection layers = map.Layers;
-                ILayer first = layers.First();
-                bool flip = first.TargetSRID == 4326;
-                BoundingBox bbox = AbstractHandler.ParseBBOX(s, flip);
-                if (bbox == null)
-                    throw new WmsInvalidBboxException(s);
-
-                string ls = request.GetParam("LAYERS");
-                if (!String.IsNullOrEmpty(ls))
                 {
-                    string[] strings = ls.Split(',');
-                    foreach (ILayer layer in layers)
-                        if (!strings.Contains(layer.LayerName))
-                            layer.Enabled = false;
+                    WmsException.ThrowWmsException(WmsException.WmsExceptionCode.InvalidDimensionValue, "Required parameter BBOX not specified", context);
+                    return;
                 }
 
-                IEnumerable<GeoJSON> items = GetData(map, bbox);
+                Map map = this.GetMap(context.Request);
+                bool flip = map.Layers[0].TargetSRID == 4326;
+                BoundingBox bbox = WmsServer.ParseBBOX(s, flip);
+                if (bbox == null)
+                {
+                    WmsException.ThrowWmsException("Invalid parameter BBOX", context);
+                    return;
+                }
+
+                string ls = context.Request.Params["LAYERS"];
+                if (!String.IsNullOrEmpty(ls))
+                {
+                    string[] layers = ls.Split(',');
+                    foreach (ILayer layer in map.Layers)
+                        if (!layers.Contains(layer.LayerName))
+                             layer.Enabled = false;
+                }
+
+                IEnumerable<GeoJSON> items = GetData(map, bbox);                
                 StringWriter writer = new StringWriter();
                 GeoJSONWriter.Write(items, writer);
                 string buffer = writer.ToString();
 
-                IHandlerResponse result = new GetFeatureInfoResponseJson(buffer);
-                result.WriteToContextAndFlush(response);
+                context.Response.Clear();
+                context.Response.ContentType = "text/json";
+                context.Response.BufferOutput = true;
+                context.Response.Write(buffer);
+                context.Response.End();
             }
-            catch (WmsExceptionBase ex)
+            catch (Exception ex)
             {
-                ex.WriteToContextAndFlush(response);
+                Trace.WriteLine(ex);
+                throw;
             }
         }
 
@@ -64,11 +72,11 @@ namespace SharpMap.Demo.Wms.Handlers
         {
             if (map == null)
                 throw new ArgumentNullException("map");
-
+            
             // Only queryable data!
             IQueryable<ICanQueryLayer> coll = map.Layers
                 .AsQueryable()
-                .Where(l => l.Enabled)
+                .Where(l => l.Enabled) 
                 .OfType<ICanQueryLayer>()
                 .Where(l => l.IsQueryEnabled);
 

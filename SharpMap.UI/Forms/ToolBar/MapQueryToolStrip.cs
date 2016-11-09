@@ -21,7 +21,7 @@ namespace SharpMap.Forms.ToolBar
             InitializeComponent();
         }
 
-        private static readonly Common.Logging.ILog Logger = Common.Logging.LogManager.GetCurrentClassLogger();
+        private static readonly Common.Logging.ILog Logger = Common.Logging.LogManager.GetLogger(typeof(MapQueryToolStrip));
 
         private ToolStripButton _clear;
         private ToolStripSeparator _sep1;
@@ -30,7 +30,7 @@ namespace SharpMap.Forms.ToolBar
         private ToolStripSeparator _sep2;
         private ToolStripComboBox _queryLayerPicker;
 
-        private Data.Providers.FeatureProvider _geometryProvider;
+        private Data.Providers.GeometryFeatureProvider _geometryProvider;
         private Layers.VectorLayer _layer;
 
         private readonly Dictionary<string, int> _dictLayerNameToIndex
@@ -131,12 +131,14 @@ namespace SharpMap.Forms.ToolBar
         private void OnMapChanged(object sender, EventArgs e)
         {
             MapControl.Map.Layers.ListChanged += OnListChanged;
+            MapControl.Map.BackgroundLayer.ListChanged += OnListChanged;
             OnListChanged(MapControl.Map.Layers, new ListChangedEventArgs(ListChangedType.Reset, 0));
         }
 
         private void OnMapChanging(object sender, CancelEventArgs e)
         {
             MapControl.Map.Layers.ListChanged -= OnListChanged;
+            MapControl.Map.BackgroundLayer.ListChanged -= OnListChanged;
         }
 
         private void OnSelectedIndexChanged(object sender, EventArgs e)
@@ -162,6 +164,10 @@ namespace SharpMap.Forms.ToolBar
             if (MapControl == null) return;
             switch (tool)
             {
+                case MapBox.Tools.QueryGeometry:
+                    _queryGeometry.Checked = true;
+                    _queryWindow.Checked = false;
+                    break;
                 case MapBox.Tools.QueryBox:
                     _queryGeometry.Checked = false;
                     _queryWindow.Checked = true;
@@ -226,7 +232,7 @@ namespace SharpMap.Forms.ToolBar
 
             if (MapControl == null) return;
 
-            _geometryProvider = new SharpMap.Data.Providers.FeatureProvider(features);
+            _geometryProvider = new SharpMap.Data.Providers.GeometryFeatureProvider(features);
             _layer = new SharpMap.Layers.VectorLayer("QueriedFeatures", _geometryProvider);
             _layer.IsQueryEnabled = false;
             
@@ -252,6 +258,8 @@ namespace SharpMap.Forms.ToolBar
             MapBox.Tools newTool;
             if (sender == _queryWindow)
                 newTool = MapBox.Tools.QueryBox;
+            else if (sender == _queryGeometry)
+                newTool = MapBox.Tools.QueryGeometry;
             else
             {
                 if (Logger.IsWarnEnabled)

@@ -19,9 +19,9 @@ namespace WinFormSamples.Samples
             VectorLayer layCountries = new VectorLayer("OracleSample");
 
             //Set the datasource to a shapefile in the App_data folder
-            layCountries.DataSource = new SharpMap.Data.Providers.OracleProvider("system", "metsys", "127.0.0.1",
+            layCountries.DataSource = new SharpMap.Data.Providers.Oracle("system", "metsys", "127.0.0.1",
                                                                          "COUNTRIES", "GEOM", "ID");
-            //System.Diagnostics.Debug.WriteLine(layCountries.DataSource.GetGeometryByOid(101).ToString());
+            //System.Diagnostics.Debug.WriteLine(layCountries.DataSource.GetGeometryByID(101).ToString());
 
             //Set fill-style to green
             layCountries.Style.Fill = new SolidBrush(Color.Green);
@@ -32,14 +32,14 @@ namespace WinFormSamples.Samples
             //Set up a river layer
             VectorLayer layRivers = new SharpMap.Layers.VectorLayer("Rivers");
             //Set the datasource to a shapefile in the App_data folder
-            layRivers.DataSource = new SharpMap.Data.Providers.OracleProvider("system", "metsys", "127.0.0.1", "RIVERS", "GEOM", "ID");
+            layRivers.DataSource = new SharpMap.Data.Providers.Oracle("system", "metsys", "127.0.0.1", "RIVERS", "GEOM", "ID");
             //Define a blue 1px wide pen
             layRivers.Style.Line = new Pen(Color.Blue, 1);
 
             //Set up a river layer
             VectorLayer layCities = new VectorLayer("Cities");
             //Set the datasource to a shapefile in the App_data folder
-            layCities.DataSource = new SharpMap.Data.Providers.OracleProvider("system", "metsys", "127.0.0.1", "CITIES", "GEOM", "ID");
+            layCities.DataSource = new SharpMap.Data.Providers.Oracle("system", "metsys", "127.0.0.1", "CITIES", "GEOM", "ID");
             layCities.Style.SymbolScale = 0.8f;
             layCities.MaxVisible = 40;
 
@@ -71,10 +71,10 @@ namespace WinFormSamples.Samples
                 Enabled = true,
                 LabelColumn = "NAME",
                 PriorityColumn = "POPULATION",
-                PriorityDelegate = delegate(GeoAPI.Features.IFeature fdr)
+                PriorityDelegate = delegate(SharpMap.Data.FeatureDataRow fdr)
                 {
-                    Int32 retVal = 10000000 * ((String)fdr.Attributes["capital"] == "Y" ? 1 : 0);
-                    return retVal + Convert.ToInt32(fdr.Attributes["population"]);
+                    Int32 retVal = 10000000 * ((String)fdr["capital"] == "Y" ? 1 : 0);
+                    return retVal + Convert.ToInt32(fdr["population"]);
                 },
                 TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias,
                 SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias,

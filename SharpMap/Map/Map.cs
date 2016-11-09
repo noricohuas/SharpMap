@@ -16,7 +16,11 @@
 // Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -29,6 +33,7 @@ using NetTopologySuite;
 using SharpMap.Layers;
 using SharpMap.Rendering;
 using SharpMap.Rendering.Decoration;
+using SharpMap.Styles;
 using SharpMap.Utilities;
 using Point = GeoAPI.Geometries.Coordinate;
 using System.Drawing.Imaging;
@@ -145,6 +150,10 @@ namespace SharpMap
         internal Matrix MapTransformInverted;
         
         private readonly MapViewPortGuard _mapViewportGuard;
+        private readonly Dictionary<object, List<ILayer>> _layersPerGroup = new Dictionary<object, List<ILayer>>();
+        private ObservableCollection<ILayer> _replacingCollection;
+        private Guid _id = Guid.NewGuid();
+
         #endregion
 
 
@@ -172,13 +181,16 @@ namespace SharpMap
         {
             _mapViewportGuard = new MapViewPortGuard(size, 0d, Double.MaxValue);
 
-            if (System.ComponentModel.LicenseManager.UsageMode != System.ComponentModel.LicenseUsageMode.Designtime)
+            if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
             {
                 Factory = GeoAPI.GeometryServiceProvider.Instance.CreateGeometryFactory(_srid);
             }
             _layers = new LayerCollection();
+            _layersPerGroup.Add(_layers, new List<ILayer>());
             _backgroundLayers = new LayerCollection();
+            _layersPerGroup.Add(_backgroundLayers, new List<ILayer>());
             _variableLayers = new VariableLayerCollection(_layers);
+            _layersPerGroup.Add(_variableLayers, new List<ILayer>());
             BackColor = Color.Transparent;
             _mapTransform = new Matrix();
             MapTransformInverted = new Matrix();
@@ -196,45 +208,155 @@ namespace SharpMap
         /// </summary>
         private void WireEvents()
         {
-            _backgroundLayers.ListChanged += HandleLayersCollectionChanged;
+            _backgroundLayers.CollectionChanged += OnLayersCollectionChanged;
+            _layers.CollectionChanged += OnLayersCollectionChanged;
         }
 
         /// <summary>
         /// Event handler to intercept when a new ITileAsymclayer is added to the Layers List and associate the MapNewTile Handler Event
         /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void HandleLayersCollectionChanged(object sender, System.ComponentModel.ListChangedEventArgs e)
+        private void OnLayersCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
-            if (sender == _backgroundLayers)
-            if (e.ListChangedType == System.ComponentModel.ListChangedType.ItemAdded)
+            if (e.Action == NotifyCollectionChangedAction.Reset)
             {
+                var cloneList = _layersPerGroup[sender];
+                IterUnHookEvents(sender, cloneList);
+            }
+            if (e.Action == NotifyCollectionChangedAction.Replace || e.Action == NotifyCollectionChangedAction.Remove)
+            {
+                IterUnHookEvents(sender, e.OldItems.Cast<ILayer>());
+            }
+            if (e.Action == NotifyCollectionChangedAction.Replace || e.Action == NotifyCollectionChangedAction.Add)
+            {
+                IterWireEvents(sender, e.NewItems.Cast<ILayer>());
+            }
+            
+        }
 
-                var l = _backgroundLayers[e.NewIndex];
-                var tileAsyncLayer = l as ITileAsyncLayer;
+        private void IterWireEvents(object owner, IEnumerable<ILayer> layers)
+        {
+            foreach(var layer in layers)
+            {
+                _layersPerGroup[owner].Add(layer);
+
+                var tileAsyncLayer = layer as ITileAsyncLayer;
                 if (tileAsyncLayer != null)
                 {
-                    if (tileAsyncLayer.OnlyRedrawWhenComplete)
+                    WireTileAsyncEvents(tileAsyncLayer);
+                }
+
+                var group = layer as LayerGroup;
+                if (group != null)
+                {
+                    group.LayersChanging += OnLayerGroupCollectionReplaching;
+                    group.LayersChanged += OnLayerGroupCollectionReplached;
+
+                    var nestedList = group.Layers;
+                    if (group.Layers != null)
                     {
-                        tileAsyncLayer.DownloadProgressChanged += layer_DownloadProgressChanged;
+                        group.Layers.CollectionChanged += OnLayersCollectionChanged;
+                        _layersPerGroup.Add(nestedList, new List<ILayer>());
                     }
                     else
                     {
-                        tileAsyncLayer.MapNewTileAvaliable += MapNewTileAvaliableHandler;
+                        _layersPerGroup.Add(nestedList, new List<ILayer>());
                     }
+
+                    IterWireEvents(nestedList, nestedList);
                 }
             }
         }
 
-        void layer_DownloadProgressChanged(int tilesRemaining)
+        private void IterUnHookEvents(object owner, IEnumerable<ILayer> layers)
+        {
+            var toBeRemoved = new List<ILayer>();
+
+            foreach (var layer in layers)
+            {
+                toBeRemoved.Add(layer);
+
+                var tileAsyncLayer = layer as ITileAsyncLayer;
+                if (tileAsyncLayer != null)
+                {
+                    UnhookTileAsyncEvents(tileAsyncLayer);
+                }
+
+                var group = layer as LayerGroup;
+                if (group != null)
+                {
+                    group.LayersChanging -= OnLayerGroupCollectionReplaching;
+                    group.LayersChanged -= OnLayerGroupCollectionReplached;
+
+                    var nestedList = group.Layers;
+
+                    if (nestedList != null)
+                    {
+                        nestedList.CollectionChanged -= OnLayersCollectionChanged;
+
+                        IterUnHookEvents(nestedList, nestedList);
+
+                        _layersPerGroup.Remove(nestedList);
+                    }
+                }
+            }
+
+            var clonedList = _layersPerGroup[owner];
+            toBeRemoved.ForEach(layer => clonedList.Remove(layer));
+        }
+        
+        private void OnLayerGroupCollectionReplached(object sender, EventArgs eventArgs)
+        {
+            var layerGroup = (LayerGroup)sender;
+
+            var newCollection = layerGroup.Layers;
+
+            IterUnHookEvents(_replacingCollection, _replacingCollection);
+            _layersPerGroup.Remove(_replacingCollection);
+            _replacingCollection.CollectionChanged -= OnLayersCollectionChanged;
+
+            if (newCollection != null)
+            {
+                IterWireEvents(newCollection, newCollection);
+
+                _layersPerGroup.Add(newCollection, new List<ILayer>(newCollection));
+
+                newCollection.CollectionChanged += OnLayersCollectionChanged;
+            }
+        }
+
+        private void OnLayerGroupCollectionReplaching(object sender, EventArgs eventArgs)
+        {
+            var layerGroup = (LayerGroup) sender;
+
+            _replacingCollection = layerGroup.Layers;
+        }
+
+        private void layer_DownloadProgressChanged(int tilesRemaining)
         {
             if (tilesRemaining <= 0)
             {
-                var e = RefreshNeeded;
-                if (e != null)
-                    e(this, new EventArgs());
+                OnRefreshNeeded(EventArgs.Empty);
             }
         }
+
+        private void WireTileAsyncEvents(ITileAsyncLayer tileAsyncLayer)
+        {
+            if (tileAsyncLayer.OnlyRedrawWhenComplete)
+            {
+                tileAsyncLayer.DownloadProgressChanged += layer_DownloadProgressChanged;
+            }
+            else
+            {
+                tileAsyncLayer.MapNewTileAvaliable += MapNewTileAvaliableHandler;
+            }
+        }
+
+        private void UnhookTileAsyncEvents(ITileAsyncLayer tileAsyncLayer)
+        {
+            tileAsyncLayer.DownloadProgressChanged -= layer_DownloadProgressChanged;
+            tileAsyncLayer.MapNewTileAvaliable -= MapNewTileAvaliableHandler;
+        }
+
 
         #region IDisposable Members
 
@@ -454,7 +576,7 @@ namespace SharpMap
         /// <param name="sourceWidth"></param>
         /// <param name="sourceHeight"></param>
         /// <param name="imageAttributes"></param>
-        public void MapNewTileAvaliableHandler(TileLayer sender, Envelope bbox, Bitmap bm, int sourceWidth, int sourceHeight, ImageAttributes imageAttributes)
+        public void MapNewTileAvaliableHandler(ITileAsyncLayer sender, Envelope bbox, Bitmap bm, int sourceWidth, int sourceHeight, ImageAttributes imageAttributes)
         {
             var e = MapNewTileAvaliable;
             if (e != null)
@@ -487,8 +609,9 @@ namespace SharpMap
             g.Clear(BackColor);
             g.PageUnit = GraphicsUnit.Pixel;
 
+            double zoom = Zoom;
+            double scale = double.NaN; //will be resolved if needed
 
-            //int srid = (Layers.Count > 0 ? Layers[0].SRID : -1); //Get the SRID of the first layer
             ILayer[] layerList;
             if (_backgroundLayers != null && _backgroundLayers.Count > 0)
             {
@@ -496,9 +619,20 @@ namespace SharpMap
                 _backgroundLayers.CopyTo(layerList, 0);
                 foreach (ILayer layer in layerList)
                 {
+                    if (layer.VisibilityUnits == VisibilityUnits.Scale && double.IsNaN(scale))
+                    {
+                        scale = MapScale;
+                    }
+                    double visibleLevel = layer.VisibilityUnits == VisibilityUnits.ZoomLevel ? zoom : scale;
+
                     OnLayerRendering(layer, LayerCollectionType.Background);
-                    if (layer.Enabled && layer.MaxVisible >= Zoom && layer.MinVisible < Zoom)
-                        layer.Render(g, this);
+                    if (layer.Enabled)
+                    {
+                        if (layer.MaxVisible >= visibleLevel && layer.MinVisible < visibleLevel)
+                        {
+                            LayerCollectionRenderer.RenderLayer(layer, g, this);
+                        }
+                    }
                     OnLayerRendered(layer, LayerCollectionType.Background);
                 }
             }
@@ -511,9 +645,15 @@ namespace SharpMap
                 //int srid = (Layers.Count > 0 ? Layers[0].SRID : -1); //Get the SRID of the first layer
                 foreach (ILayer layer in layerList)
                 {
+                    if (layer.VisibilityUnits == VisibilityUnits.Scale && double.IsNaN(scale))
+                    {
+                        scale = MapScale;
+                    }
+                    double visibleLevel = layer.VisibilityUnits == VisibilityUnits.ZoomLevel ? zoom : scale;
                     OnLayerRendering(layer, LayerCollectionType.Static);
-                    if (layer.Enabled && layer.MaxVisible >= Zoom && layer.MinVisible < Zoom)
-                        layer.Render(g, this);
+                    if (layer.Enabled && layer.MaxVisible >= visibleLevel && layer.MinVisible < visibleLevel)
+                        LayerCollectionRenderer.RenderLayer(layer, g, this);
+                        
                     OnLayerRendered(layer, LayerCollectionType.Static);
                 }
             }
@@ -524,8 +664,14 @@ namespace SharpMap
                 _variableLayers.CopyTo(layerList, 0);
                 foreach (ILayer layer in layerList)
                 {
-                    if (layer.Enabled && layer.MaxVisible >= Zoom && layer.MinVisible < Zoom)
-                        layer.Render(g, this);
+                    if (layer.VisibilityUnits == VisibilityUnits.Scale && double.IsNaN(scale))
+                    {
+                        scale = MapScale;
+                    }
+                    double visibleLevel = layer.VisibilityUnits == VisibilityUnits.ZoomLevel ? zoom : scale;
+                    if (layer.Enabled && layer.MaxVisible >= visibleLevel && layer.MinVisible < visibleLevel)
+                        LayerCollectionRenderer.RenderLayer(layer, g, this);
+                        
                 }
             }
 
@@ -542,6 +688,17 @@ namespace SharpMap
             VariableLayerCollection.Pause = false;
 
             OnMapRendered(g);
+        }
+
+        /// <summary>
+        /// Fires the RefreshNeeded event.
+        /// </summary>
+        /// <param name="e">EventArgs argument.</param>
+        protected virtual void OnRefreshNeeded(EventArgs e)
+        {
+            var handler = RefreshNeeded;
+            if (handler != null)
+                handler(this, e);
         }
 
         /// <summary>
@@ -655,10 +812,10 @@ namespace SharpMap
 
             g.PageUnit = GraphicsUnit.Pixel;
 
-            LayerCollectionRenderer.AllowParallel = true;
+            //LayerCollectionRenderer.AllowParallel = layerCollectionType == LayerCollectionType.Static;
             using (var lcr = new LayerCollectionRenderer(lc))
             {
-                lcr.Render(g, this);
+                lcr.Render(g, this, layerCollectionType == LayerCollectionType.Static);
             }
 
             /*
@@ -717,10 +874,13 @@ namespace SharpMap
 #pragma warning restore 612,618
                     MaximumZoom = MaximumZoom,
                     MinimumZoom = MinimumZoom,
+                    MaximumExtents = MaximumExtents,
+                    EnforceMaximumExtents = EnforceMaximumExtents,
                     PixelAspectRatio = PixelAspectRatio,
                     Zoom = Zoom,
                     DisposeLayersOnDispose = false,
-                    SRID = SRID
+                    SRID = SRID,
+                    _id = ID
                 };
 
 #pragma warning disable 612,618
@@ -941,6 +1101,15 @@ namespace SharpMap
         #region Properties
 
         /// <summary>
+        /// Gets or sets the unique identifier of the map.
+        /// </summary>
+        public Guid ID
+        {
+            get { return _id; }
+            set { _id = value; }
+        }
+
+        /// <summary>
         /// Gets or sets the SRID of the map
         /// </summary>
         public int SRID
@@ -1094,6 +1263,8 @@ namespace SharpMap
             }
         }
 
+        private static int? _dpiX;
+
         /// <summary>
         /// Gets or Sets the Scale of the map (related to current DPI-settings of rendering)
         /// </summary>
@@ -1101,25 +1272,27 @@ namespace SharpMap
         {
             get
             {
-                using (var img = new Bitmap(1, 1))
+                if (!_dpiX.HasValue)
                 {
-                    using (var g = Graphics.FromImage(img))
+                    using (var g = Graphics.FromHwnd(IntPtr.Zero))
                     {
-                        return GetMapScale((int) g.DpiX);
+                        _dpiX = (int) g.DpiX;
                     }
                 }
+
+                return GetMapScale(_dpiX.Value);
             }
             set
             {
-
-                using (var img = new Bitmap(1, 1))
+                if (!_dpiX.HasValue)
                 {
-                    using (var g = Graphics.FromImage(img))
+                    using (var g = Graphics.FromHwnd(IntPtr.Zero))
                     {
-                        Zoom = GetMapZoomFromScale(value, (int) g.DpiX);
+                        _dpiX = (int) g.DpiX;
                     }
                 }
-            
+                Zoom = GetMapZoomFromScale(value, _dpiX.Value);
+
             }
         }
 

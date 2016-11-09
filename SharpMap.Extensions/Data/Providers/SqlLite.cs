@@ -16,22 +16,20 @@
 // Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Data;
 using System.Data.SQLite;
 using System.Globalization;
-using System.Threading;
-using GeoAPI.Features;
 using SharpMap.Converters.WellKnownText;
-using GeoAPI.Geometries;
+using BoundingBox = GeoAPI.Geometries.Envelope;
+using Geometry = GeoAPI.Geometries.IGeometry;
 using Common.Logging;
 
 namespace SharpMap.Data.Providers
 {
     public class SqlLite : PreparedGeometryProvider
     {
-        static readonly ILog _logger = LogManager.GetLogger(typeof(SqlLite));
+        static ILog logger = LogManager.GetLogger(typeof(SqlLite));
 
         //string conStr = "Data Source=C:\\Workspace\\test.sqlite;Version=3;";
         private string _definitionQuery;
@@ -94,11 +92,12 @@ namespace SharpMap.Data.Providers
 
         #region IProvider Members
 
-        public override IEnumerable<IGeometry> GetGeometriesInView(Envelope view, CancellationToken? cancellationToken = null)
+        public override Collection<Geometry> GetGeometriesInView(BoundingBox bbox)
         {
+            var features = new Collection<Geometry>();
             using (var conn = new SQLiteConnection(ConnectionID))
             {
-                var boxIntersect = GetBoxClause(view);
+                var boxIntersect = GetBoxClause(bbox);
 
                 var strSQL = "SELECT " + GeometryColumn + " AS Geom ";
                 strSQL += "FROM " + Table + " WHERE ";
@@ -117,16 +116,17 @@ namespace SharpMap.Data.Providers
                             {
                                 var geom = GeometryFromWKT.Parse((string) dr[0]);
                                 if (geom != null)
-                                    yield return geom;
+                                    features.Add(geom);
                             }
                         }
                     }
                     conn.Close();
                 }
             }
+            return features;
         }
 
-        public override IEnumerable<object> GetOidsInView(Envelope bbox, CancellationToken? cancellationToken = null)
+        public override Collection<uint> GetObjectIDsInView(BoundingBox bbox)
         {
             var objectlist = new Collection<uint>();
             using (var conn = new SQLiteConnection(ConnectionID))
@@ -148,26 +148,27 @@ namespace SharpMap.Data.Providers
                         {
                             if (dr[0] != DBNull.Value)
                             {
-                                yield return dr[0];
+                                var id = (uint) (int) dr[0];
+                                objectlist.Add(id);
                             }
                         }
                     }
                     conn.Close();
                 }
             }
+            return objectlist;
         }
 
-        public override IGeometry GetGeometryByOid(object oid)
+        public override Geometry GetGeometryByID(uint oid)
         {
-            IGeometry geom = null;
+            Geometry geom = null;
             using (var conn = new SQLiteConnection(ConnectionID))
             {
                 string strSQL = "SELECT " + GeometryColumn + " AS Geom FROM " + Table + " WHERE " + ObjectIdColumn +
-                                "=@POid";
+                                "='" + oid.ToString(NumberFormatInfo.InvariantInfo) + "'";
                 conn.Open();
                 using (var command = new SQLiteCommand(strSQL, conn))
                 {
-                    command.Parameters.Add(new SQLiteParameter("POid", oid));
                     using (var dr = command.ExecuteReader())
                     {
                         while (dr.Read())
@@ -182,19 +183,18 @@ namespace SharpMap.Data.Providers
             return geom;
         }
 
-        protected override void OnExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null)
+        protected override void OnExecuteIntersectionQuery(Geometry geom, FeatureDataSet ds)
         {
-            var fds = new FeatureDataSet();
-            ExecuteIntersectionQuery(geom.EnvelopeInternal, fds);
+            ExecuteIntersectionQuery(geom.EnvelopeInternal, ds);
             
             //index of last added feature data table
-            var index = fds.Tables.Count - 1;
+            var index = ds.Tables.Count - 1;
             if (index <= 0) return;
 
-            var res = (FeatureDataTable)CloneTableStructure(fds.Tables[index].Clone());
+            var res = CloneTableStructure(ds.Tables[index]);
             res.BeginLoadData();
             
-            var fdt = fds.Tables[index];
+            var fdt = ds.Tables[index];
             foreach (FeatureDataRow row in fdt.Rows)
             {
                 if (PreparedGeometry.Intersects(row.Geometry))
@@ -205,11 +205,12 @@ namespace SharpMap.Data.Providers
             }
 
             res.EndLoadData();
-            ds.Add(res);
-            fds.Dispose();
+
+            ds.Tables.RemoveAt(index);
+            ds.Tables.Add(res);
         }
 
-        public override void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet fcs, CancellationToken? cancellationToken = null)
+        public override void ExecuteIntersectionQuery(BoundingBox box, FeatureDataSet ds)
         {
             using (var conn = new SQLiteConnection(ConnectionID))
             {
@@ -244,7 +245,7 @@ namespace SharpMap.Data.Providers
                                 fdr.Geometry = GeometryFromWKT.Parse((string) dr["sharpmap_tempgeometry"]);
                             fdt.AddRow(fdr);
                         }
-                        fcs.Add(fdt);
+                        ds.Tables.Add(fdt);
                     }
                 }
             }
@@ -268,16 +269,15 @@ namespace SharpMap.Data.Providers
             return count;
         }
 
-        public override IFeature GetFeatureByOid(object oid)
+        public override FeatureDataRow GetFeature(uint rowId)
         {
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 string strSQL = "SELECT *, " + GeometryColumn + " AS sharpmap_tempgeometry FROM " + Table + " WHERE " +
-                                ObjectIdColumn + "=@POid";
+                                ObjectIdColumn + "='" + rowId.ToString(NumberFormatInfo.InvariantInfo) + "'";
                 using (var adapter = new SQLiteDataAdapter(strSQL, conn))
                 {
-                    adapter.SelectCommand.Parameters.Add(new SQLiteParameter("POid", oid));
-                    var ds = new DataSet();
+                    DataSet ds = new DataSet();
                     conn.Open();
                     adapter.Fill(ds);
                     conn.Close();
@@ -307,9 +307,9 @@ namespace SharpMap.Data.Providers
             }
         }
 
-        public override Envelope GetExtents()
+        public override BoundingBox GetExtents()
         {
-            Envelope box = null;
+            BoundingBox box = null;
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 string strSQL =
@@ -322,7 +322,7 @@ namespace SharpMap.Data.Providers
                     using (SQLiteDataReader dr = command.ExecuteReader())
                         if (dr.Read())
                         {
-                            box = new Envelope((double) dr[0], (double) dr[2], (double) dr[1], (double) dr[3]);
+                            box = new BoundingBox((double) dr[0], (double) dr[2], (double) dr[1], (double) dr[3]);
                         }
                     conn.Close();
                 }
@@ -332,7 +332,7 @@ namespace SharpMap.Data.Providers
 
         #endregion
 
-        private static string GetBoxClause(Envelope bbox)
+        private static string GetBoxClause(BoundingBox bbox)
         {
             return String.Format(Map.NumberFormatEnUs,
                                  "(minx < {0} AND maxx > {1} AND miny < {2} AND maxy > {3})",
@@ -376,12 +376,12 @@ namespace SharpMap.Data.Providers
         public static int CreateDataTable(IProvider datasource, string tablename, string connstr)
         {
             datasource.Open();
-            var geom = datasource.GetFeatureByOid(0);
-            var columns = geom.Factory.AttributesDefinition;
+            FeatureDataRow geom = datasource.GetFeature(0);
+            DataColumnCollection columns = geom.Table.Columns;
             int counter = -1;
-            using (var conn = new SQLiteConnection(connstr))
+            using (SQLiteConnection conn = new SQLiteConnection(connstr))
             {
-                var command = new SQLiteCommand();
+                SQLiteCommand command = new SQLiteCommand();
                 command.Connection = conn;
 
                 conn.Open();
@@ -397,27 +397,27 @@ namespace SharpMap.Data.Providers
                 //Create new table for storing the datasource
                 string sql = "CREATE TABLE " + tablename + " (fid INTEGER PRIMARY KEY, geom TEXT, " +
                              "minx REAL, miny REAL, maxx REAL, maxy REAL, oid INTEGER";
-                foreach (var col in columns)
-                    if (col.AttributeType != typeof (String))
-                        sql += ", " + col.AttributeName + " " + Type2SqlLiteTypeString(col.AttributeType);
+                foreach (DataColumn col in columns)
+                    if (col.DataType != typeof (String))
+                        sql += ", " + col.ColumnName + " " + Type2SqlLiteTypeString(col.DataType);
                     else
-                        sql += ", " + col.AttributeName + " TEXT";
+                        sql += ", " + col.ColumnName + " TEXT";
                 command.CommandText = sql + ");";
                 //command.CommandText = sql;
                 command.ExecuteNonQuery();
                 counter++;
-                var indexes = datasource.GetOidsInView(datasource.GetExtents());
+                Collection<uint> indexes = datasource.GetObjectIDsInView(datasource.GetExtents());
                 //Select all indexes in shapefile, loop through each feature and insert them one-by-one
-                foreach (var idx in indexes)
+                foreach (uint idx in indexes)
                 {
-                    //Get feature from provider
-                    var feature = datasource.GetFeatureByOid(idx);
+                    //Get feature from shapefile
+                    FeatureDataRow feature = datasource.GetFeature(idx);
                     if (counter == 0)
                     {
                         //Create insert script
-                        var strSQL = " (";
-                        foreach (var col in columns)
-                            strSQL += "@" + col.AttributeName + ",";
+                        string strSQL = " (";
+                        foreach (DataColumn col in feature.Table.Columns)
+                            strSQL += "@" + col.ColumnName + ",";
 
                         strSQL += "@geom,@minx,@miny, " +
                                   "@maxx,@maxy)";
@@ -426,8 +426,8 @@ namespace SharpMap.Data.Providers
                         command.CommandText = strSQL;
                         command.Parameters.Clear();
                         //Add datacolumn parameters
-                        foreach (var col in columns)
-                            command.Parameters.Add("@" + col.AttributeName, Type2SqlType(col.AttributeType));
+                        foreach (DataColumn col in feature.Table.Columns)
+                            command.Parameters.Add("@" + col.ColumnName, Type2SqlType(col.DataType));
 
                         //Add geometry parameters
                         //command.Parameters.Add("@geom", DbType.Binary);
@@ -437,12 +437,12 @@ namespace SharpMap.Data.Providers
                         command.Parameters.Add("@maxy", DbType.Double);
                     }
                     //Set values
-                    foreach (var col in columns)
-                        command.Parameters["@" + col.AttributeName].Value = feature.Attributes[col.AttributeName];
+                    foreach (DataColumn col in feature.Table.Columns)
+                        command.Parameters["@" + col.ColumnName].Value = feature[col];
                     if (feature.Geometry != null)
                     {
-                        if (_logger.IsDebugEnabled)
-                            _logger.Debug(feature.Geometry.AsBinary().Length.ToString(NumberFormatInfo.InvariantInfo));
+                        if (logger.IsDebugEnabled)
+                            logger.Debug(feature.Geometry.AsBinary().Length.ToString(NumberFormatInfo.InvariantInfo));
 
                         command.Parameters.AddWithValue("@geom", feature.Geometry.AsText()); //.AsBinary());
                         //command.Parameters["@geom"].Value = "X'" + ToHexString(feature.Geometry.AsBinary()) + "'"; //Add the geometry as Well-Known Binary

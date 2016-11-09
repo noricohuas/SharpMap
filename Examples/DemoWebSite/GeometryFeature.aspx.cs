@@ -28,7 +28,7 @@ public partial class GeometryFeature : Page
         fdt.EndLoadData();
 
         var vLayer = new VectorLayer("GeometryProvider");
-        vLayer.DataSource = new FeatureProvider(fdt);
+        vLayer.DataSource = new GeometryFeatureProvider(fdt);
         vLayer.SRID = 4326;
 
         return vLayer;
@@ -47,7 +47,7 @@ public partial class GeometryFeature : Page
         layGeomProviderLabel.LabelColumn = "Name";
         layGeomProviderLabel.Style = new LabelStyle();
         layGeomProviderLabel.Style.ForeColor = Color.AliceBlue;
-        layGeomProviderLabel.Style.Font = new Font("ArialB", 14);
+        layGeomProviderLabel.Style.Font = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Bold);
         layGeomProviderLabel.Style.Offset = new PointF(4, 4);
         layGeomProviderLabel.Style.HorizontalAlignment = LabelStyle.HorizontalAlignmentEnum.Left;
         layGeomProviderLabel.Style.VerticalAlignment = LabelStyle.VerticalAlignmentEnum.Bottom;

@@ -52,7 +52,7 @@ $(document).ready(function () {
             queryVisible: true
         });
         click.events.register("getfeatureinfo", this, function (evt) {
-            $('#nodelist').html(evt.text);
+            alert(evt.text);
         });
 
         toolbar = OpenLayers.Class(OpenLayers.Control.NavToolbar, {

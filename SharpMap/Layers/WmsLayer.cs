@@ -21,9 +21,11 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using GeoAPI.Geometries;
+using SharpMap.CoordinateSystems;
 using SharpMap.Rendering.Exceptions;
 using SharpMap.Web.Wms;
 using Common.Logging;
@@ -80,6 +82,7 @@ namespace SharpMap.Layers
         private bool _transparent = true;
         private Color _bgColor = Color.White;
         //private readonly string _capabilitiesUrl;
+        private Envelope _envelope;
 
         /// <summary>
         /// Initializes a new layer, and downloads and parses the service description
@@ -374,33 +377,20 @@ namespace SharpMap.Layers
         /// <returns>Bounding box corresponding to the extent of the features in the layer</returns>
         public override Envelope Envelope
         {
-            //There are two boundingboxes available: 1 as EPSG:4326 with LatLonCoordinates and or one with the coordinates of the FIRST BoundingBox with SRID of the layer
-            //If the request is using EPSG:4326, it should use the boundingbox with LatLon coordinates, else, it should use the boundingbox with the coordinates in the SRID
             get
             {
-                var boxes = new Collection<Envelope>();
-                var sridBoxes = getBoundingBoxes(RootLayer);
-                foreach (var sridBox in sridBoxes)
-                {
-                    if (SRID == sridBox.SRID)
-                        boxes.Add(sridBox);
-                }
+                return _envelope ?? (_envelope = GetEnvelope());
+            }
+        }
 
-                if (boxes.Count > 0)
-                {
-                    var res = new Envelope();
-                    foreach (var envelope in boxes)
-                        res.ExpandToInclude(envelope);
+        public override int SRID
+        {
+            get { return base.SRID; }
+            set
+            {
+                base.SRID = value;
 
-                    return res;
-                }
-
-                if (SRID == 4326)
-                    return RootLayer.LatLonBoundingBox;
-
-                //There is no boundingbox defined. Maybe we should throw a NotImplementedException
-                //TODO: project one of the available bboxes to layers projection
-                return null;
+                _envelope = null;
             }
         }
 
@@ -588,7 +578,7 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="g">Graphics object reference</param>
         /// <param name="map">Map which is rendered</param>
-        public override void Render(Graphics g, Map map)
+        public override void Render(Graphics g, MapViewport map)
         {
             if (Logger.IsDebugEnabled)
                 Logger.Debug("Rendering wmslayer: " + LayerName);
@@ -756,7 +746,7 @@ namespace SharpMap.Layers
         /// <param name="box">Area the WMS request should cover</param>
         /// <param name="size">Size of image</param>
         /// <returns>URL for WMS request</returns>
-        public string GetRequestUrl(Envelope box, Size size)
+        public virtual string GetRequestUrl(Envelope box, Size size)
         {
             Client.WmsOnlineResource resource = GetPreferredMethod();
             var strReq = new StringBuilder(resource.OnlineResource);
@@ -767,8 +757,8 @@ namespace SharpMap.Layers
 
             strReq.AppendFormat(Map.NumberFormatEnUs, "REQUEST=GetMap&BBOX={0},{1},{2},{3}",
                                 box.MinX, box.MinY, box.MaxX, box.MaxY);
-            strReq.AppendFormat("&WIDTH={0}&Height={1}", size.Width, size.Height);
-            strReq.Append("&Layers=");
+            strReq.AppendFormat("&WIDTH={0}&HEIGHT={1}", size.Width, size.Height);
+            strReq.Append("&LAYERS=");
             if (_layerList != null && _layerList.Count > 0)
             {
                 foreach (string layer in _layerList)
@@ -779,9 +769,9 @@ namespace SharpMap.Layers
             if (SRID < 0)
                 throw new ApplicationException("Spatial reference system not set");
             if (Version == "1.3.0")
-                strReq.AppendFormat("&CRS=EPSG:{0}", SRID);
+                strReq.AppendFormat("&CRS={0}:{1}", Authority, SRID);
             else
-                strReq.AppendFormat("&SRS=EPSG:{0}", SRID);
+                strReq.AppendFormat("&SRS={0}:{1}", Authority, SRID);
             strReq.AppendFormat("&VERSION={0}", Version);
             strReq.Append("&Styles=");
             if (_stylesList != null && _stylesList.Count > 0)
@@ -792,10 +782,25 @@ namespace SharpMap.Layers
             }
             strReq.AppendFormat("&TRANSPARENT={0}", Transparent);
             if (!Transparent)
-                strReq.AppendFormat("&BGCOLOR={0}", ColorTranslator.ToHtml(_bgColor));
+            {
+                //var background = Uri.EscapeDataString(ColorTranslator.ToHtml(_bgColor));
+                strReq.AppendFormat("&BGCOLOR={0}", ToHexValue(_bgColor));
+            }
             return strReq.ToString();
         }
 
+        /// <summary>
+        /// Gets or sets a value indicating the authority of the spatial reference system.
+        /// </summary>
+        /// <remarks>Must not be <value>null</value></remarks>
+        public string Authority { get; set; } = "EPSG";
+
+        private static string ToHexValue(Color color)
+        {
+            return color.R.ToString("X2") +
+                   color.G.ToString("X2") +
+                   color.B.ToString("X2");
+        }
         /// <summary>
         /// Returns the preferred URL to use when communicating with the wms-server
         /// Favors GET-requests over POST-requests
@@ -812,6 +817,49 @@ namespace SharpMap.Layers
                 if (_wmsClient.GetMapRequests[i].Type.ToLower() == "post")
                     return _wmsClient.GetMapRequests[i];
             return _wmsClient.GetMapRequests[0];
+        }
+
+        private Envelope GetEnvelope()
+        {
+            var boxes = new Collection<Envelope>();
+            var sridBoxes = getBoundingBoxes(RootLayer);
+            foreach (var sridBox in sridBoxes)
+            {
+                if (SRID == sridBox.SRID)
+                    boxes.Add(sridBox);
+            }
+
+            if (boxes.Count > 0)
+            {
+                var res = new Envelope();
+                foreach (var envelope in boxes)
+                    res.ExpandToInclude(envelope);
+
+                return res;
+            }
+
+            if (SRID == 4326)
+                return RootLayer.LatLonBoundingBox;
+
+            try
+            {
+                var projection = this.GetCoordinateSystem();
+                if (projection == null)
+                {
+                    Logger.Warn("WmsLayer envelope is null because there is no Coordinate System found for SRID " + SRID);
+                    return null;
+                }
+
+                var wgs84 = Session.Instance.CoordinateSystemServices.GetCoordinateSystem(4326);
+                var transformation = Session.Instance.CoordinateSystemServices.CreateTransformation(wgs84, projection);
+
+                return ToTarget(RootLayer.LatLonBoundingBox, transformation);
+            }
+            catch (Exception e)
+            {
+                Logger.Warn("Error calculating Envelope Transformation from WGS84 to SRID " + SRID, e);
+                return null;
+            }
         }
 
         /// <summary>

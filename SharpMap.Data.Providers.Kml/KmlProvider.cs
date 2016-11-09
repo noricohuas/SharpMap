@@ -24,8 +24,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Threading;
-using GeoAPI.Features;
 using GeoAPI.Geometries;
 using SharpKml.Dom;
 using SharpKml.Engine;
@@ -192,7 +190,7 @@ namespace SharpMap.Data.Providers
 
             _geometryFactory = GeoAPI.GeometryServiceProvider.Instance.CreateGeometryFactory(4326);
             ConnectionID = doc.Name;
-            if (!string.IsNullOrEmpty(doc.Description.Text))
+            if (doc.Description != null && !string.IsNullOrEmpty(doc.Description.Text))
                 ConnectionID += " (" + doc.Description.Text + ")";
 
             ExtractStyles(kml);
@@ -244,6 +242,8 @@ namespace SharpMap.Data.Providers
             _kmlStyles.Add(DefaultStyleId, DefaultVectorStyle());
             _kmlStyles.Add(DefaultPointStyleId, DefaultPointStyle());
 
+            var symbolDict = new Dictionary<string, Image>();
+
             foreach (var style in kml.Flatten().OfType<Style>())
             {
                 if (string.IsNullOrEmpty(style.Id))
@@ -272,7 +272,7 @@ namespace SharpMap.Data.Providers
                             vectorStyle.PointColor = color;
                         }
                     }
-                    else
+                    else if (style.Polygon.Color.HasValue)
                     {
                         var color = new SolidBrush(Color.FromArgb(style.Polygon.Color.Value.Argb));
                         //fill the polygon
@@ -299,7 +299,6 @@ namespace SharpMap.Data.Providers
 
                 try
                 {
-                    var symbolDict = new Dictionary<string, Image>();
 
                     if (style.Icon != null && style.Icon.Icon != null && style.Icon.Icon.Href != null)
                     {
@@ -323,16 +322,21 @@ namespace SharpMap.Data.Providers
                     Trace.WriteLine(ex.Message);
                 }
 
-
-                _kmlStyles.Add(style.Id, vectorStyle);
-
+                try
+                {
+                    _kmlStyles.Add(style.Id, vectorStyle);
+                }
+                catch (ArgumentException)
+                {
+                    // we ignore duplicates -> bad kml
+                }
             }
         }
 
-        public VectorStyle GetKmlStyle(IFeature row)
+        public VectorStyle GetKmlStyle(FeatureDataRow row)
         {
             //get styleID from row
-            var styleId = (string)row.Attributes["StyleUrl"];
+            var styleId = (string)row["StyleUrl"];
 
             if (_kmlStyles.ContainsKey(styleId))
             {
@@ -473,8 +477,19 @@ namespace SharpMap.Data.Providers
 
         private void ProcessLineStringGeometry(LineString f)
         {
-            var pGeom =_geometryFactory.CreateLineString(
-                    f.Coordinates.Select(crd => new Coordinate(crd.Longitude, crd.Latitude)).ToArray());
+            IGeometry pGeom;
+            if (f.Coordinates.Count == 1)
+            {
+                var coord = f.Coordinates.First();
+                var coords = new Coordinate(coord.Longitude, coord.Latitude);
+
+                pGeom = _geometryFactory.CreatePoint(coords);
+            }
+            else
+            {
+                pGeom = _geometryFactory.CreateLineString(
+                        f.Coordinates.Select(crd => new Coordinate(crd.Longitude, crd.Latitude)).ToArray());
+            }
             AddGeometryToCollection(f.GetParent<Placemark>(), pGeom);
         }
 
@@ -544,12 +559,17 @@ namespace SharpMap.Data.Providers
             //    fdt.Columns.Add("Label", typeof(string));
         }
 
-        public void Dispose()
+        void IDisposable.Dispose()
         {
             // throw new System.NotImplementedException();
         }
 
-        public IEnumerable<IGeometry> GetGeometriesInView(Envelope bbox, CancellationToken? cancellationToken = null)
+        /// <summary>
+        /// Gets the features within the specified <see cref="GeoAPI.Geometries.Envelope"/>
+        /// </summary>
+        /// <param name="bbox"></param>
+        /// <returns>Features within the specified <see cref="GeoAPI.Geometries.Envelope"/></returns>
+        public Collection<IGeometry> GetGeometriesInView(Envelope bbox)
         {
             var box = _geometryFactory.ToGeometry(bbox);
             var retCollection = new Collection<IGeometry>();
@@ -563,25 +583,50 @@ namespace SharpMap.Data.Providers
 
         }
 
-        public IEnumerable<object> GetOidsInView(Envelope bbox, CancellationToken? cancellationToken = null)
+        /// <summary>
+        /// Returns all objects whose <see cref="GeoAPI.Geometries.Envelope"/> intersects 'bbox'.
+        /// </summary>
+        /// <remarks>
+        /// This method is usually much faster than the QueryFeatures method, because intersection tests
+        /// are performed on objects simplified by their <see cref="GeoAPI.Geometries.Envelope"/>, and using the Spatial Index
+        /// </remarks>
+        /// <param name="bbox">Box that objects should intersect</param>
+        /// <returns></returns>
+        public Collection<uint> GetObjectIDsInView(Envelope bbox)
         {
             var box = _geometryFactory.ToGeometry(bbox);
+            var res = new Collection<uint>();
 
-            var res = new Collection<object>();
-            _geometrys.Where(x => box.Intersects(_geometryFactory.BuildGeometry(x.Value))).ToList().ForEach(x => res.Add(x.Key.Id));
+            uint id = 0;
+            
+            _geometrys.Where(x => box.Intersects(_geometryFactory.BuildGeometry(x.Value))).ToList().ForEach(x =>
+            {
+                res.Add(id);
+                id++;
+            });
             return res;
         }
 
-        public IGeometry GetGeometryByOid(object oid)
+        /// <summary>
+        /// Returns the geometry corresponding to the Object ID
+        /// </summary>
+        /// <param name="oid">Object ID</param>
+        /// <returns>geometry</returns>
+        public IGeometry GetGeometryByID(uint oid)
         {
-            var sid = string.Format(NumberFormatInfo.InvariantInfo, "{0}", oid);
+            var sid = oid.ToString(NumberFormatInfo.InvariantInfo);
             var tmp = _geometrys.FirstOrDefault(x => x.Key.Id == sid);
             
             return tmp.Value != null ?
                 _geometryFactory.BuildGeometry(tmp.Value) : null;
         }
 
-        public void ExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null)
+        /// <summary>
+        /// Returns the data associated with all the geometries that are intersected by 'geom'
+        /// </summary>
+        /// <param name="geom">Geometry to intersect with</param>
+        /// <param name="ds">FeatureDataSet to fill data into</param>
+        public void ExecuteIntersectionQuery(IGeometry geom, FeatureDataSet ds)
         {
             var fdt = (FeatureDataTable)_schemaTable.Copy();
 
@@ -610,27 +655,41 @@ namespace SharpMap.Data.Providers
             }
             fdt.EndLoadData();
 
-            ds.Add(fdt);
+            ds.Tables.Add(fdt);
         }
 
-        public void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null)
+        /// <summary>
+        /// Returns the data associated with all the geometries that are intersected by 'geom'
+        /// </summary>
+        /// <param name="box">Geometry to intersect with</param>
+        /// <param name="ds">FeatureDataSet to fill data into</param>
+        public void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
         {
             ExecuteIntersectionQuery(_geometryFactory.ToGeometry(box), ds);
         }
 
+        /// <summary>
+        /// Returns the number of features in the dataset
+        /// </summary>
+        /// <returns>number of features</returns>
         public int GetFeatureCount()
         {
             return _geometrys.Count;
         }
 
-        public IFeature GetFeatureByOid(object oid)
+        /// <summary>
+        /// Returns a <see cref="SharpMap.Data.FeatureDataRow"/> based on a RowID
+        /// </summary>
+        /// <param name="oid">The id of the row.</param>
+        /// <returns>datarow</returns>
+        public FeatureDataRow GetFeature(uint oid)
         {
-            var sid = string.Format(NumberFormatInfo.InvariantInfo, "{0}", oid);
+            var sid = oid.ToString(NumberFormatInfo.InvariantInfo);
             var tmp = _geometrys.FirstOrDefault(x => x.Key.Id == sid);
 
             if (tmp.Value != null)
             {
-                var res = _schemaTable.NewRow();
+                var res = (FeatureDataRow) _schemaTable.NewRow();
                 res.ItemArray = GetAssetProperties(tmp.Key);
                 res.Geometry = _geometryFactory.BuildGeometry(tmp.Value);
                 res.AcceptChanges();
@@ -639,6 +698,10 @@ namespace SharpMap.Data.Providers
             return null;
         }
 
+        /// <summary>
+        /// <see cref="Envelope"/> of dataset
+        /// </summary>
+        /// <returns>The 2d extent of the layer</returns>
         public Envelope GetExtents()
         {
             var retEnv = new Envelope();
@@ -647,20 +710,40 @@ namespace SharpMap.Data.Providers
             return retEnv;
         }
 
+        /// <summary>
+        /// Opens the datasource
+        /// </summary>
         public void Open()
         {
             IsOpen = true;
         }
 
+        /// <summary>
+        /// Closes the datasource
+        /// </summary>
         public void Close()
         {
             IsOpen = false;
         }
 
+        /// <summary>
+        /// Gets the connection ID of the datasource
+        /// </summary>
+        /// <remarks>
+        /// <para>The ConnectionID should be unique to the datasource (for instance the filename or the
+        /// connectionstring), and is meant to be used for connection pooling.</para>
+        /// <para>If connection pooling doesn't apply to this datasource, the ConnectionID should return String.Empty</para>
+        /// </remarks>
         public string ConnectionID { get; private set; }
 
+        /// <summary>
+        /// Returns true if the datasource is currently open
+        /// </summary>
         public bool IsOpen { get; private set; }
 
+        /// <summary>
+        /// The spatial reference ID (CRS)
+        /// </summary>
         public int SRID { get { return 4326; } set { }}
 
         #region private helper methods

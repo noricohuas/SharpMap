@@ -20,11 +20,10 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-#if !DotSpatialProjections
+using System.Runtime.CompilerServices;
+using GeoAPI.Geometries;
+using SharpMap.Data;
 using GeoAPI.CoordinateSystems.Transformations;
-#else
-using DotSpatial.Projections;
-#endif
 using BoundingBox = GeoAPI.Geometries.Envelope;
 using Geometry = GeoAPI.Geometries.IGeometry;
 using Point = System.Drawing.Point;
@@ -32,10 +31,24 @@ using Point = System.Drawing.Point;
 namespace SharpMap.Layers
 {
     [Serializable]
-    public class GdalRasterLayerCachingProxy : Layer
+    public class GdalRasterLayerCachingProxy : Layer, ICanQueryLayer
     {
-        private readonly GdalRasterLayer _innerLayer;
+        private class ViewPort
+        {
+            public Envelope BoundingBox { get; set; }
 
+            public Size? Size { get; set; }
+
+            public Bitmap CachedBitmap { get; set; }
+
+            public bool RequiresRedraw { get; set; }
+        }
+
+        private readonly GdalRasterLayer _innerLayer;
+        private readonly Dictionary<Guid, ViewPort> _maps = new Dictionary<Guid, ViewPort>();
+        private ViewPort _viewPort = new ViewPort();
+
+        #region ctor
         public GdalRasterLayerCachingProxy(GdalRasterLayer innerLayer)
         {
             _innerLayer = innerLayer;
@@ -46,7 +59,8 @@ namespace SharpMap.Layers
         {
             LayerName = strLayerName;
             _innerLayer = new GdalRasterLayer(strLayerName, imageFilename);
-        }
+        } 
+        #endregion
 
         public string Filename
         {
@@ -384,6 +398,26 @@ namespace SharpMap.Layers
             get { return _innerLayer.Transform; }
         }
 
+        public override ICoordinateTransformation CoordinateTransformation
+        {
+            get { return _innerLayer.CoordinateTransformation; }
+            set
+            {
+                CheckUpdate(CoordinateTransformation, value);
+                _innerLayer.CoordinateTransformation = value;
+            }
+        }
+
+        public override ICoordinateTransformation ReverseCoordinateTransformation
+        {
+            get { return _innerLayer.ReverseCoordinateTransformation; }
+            set
+            {
+                CheckUpdate(ReverseCoordinateTransformation, value);
+                _innerLayer.ReverseCoordinateTransformation = value;
+            }
+        }
+
         public Color TransparentColor
         {
             get { return _innerLayer.TransparentColor; }
@@ -409,35 +443,58 @@ namespace SharpMap.Layers
             get { return _innerLayer.Envelope; }
         }
 
-        protected internal bool RequiresRedraw { get; set; }
+        public void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
+        {
+            ((ICanQueryLayer)_innerLayer).ExecuteIntersectionQuery(box, ds);
+        }
 
-        private Size? _lastRenderedSize;
+        public void ExecuteIntersectionQuery(Geometry geometry, FeatureDataSet ds)
+        {
+            ((ICanQueryLayer)_innerLayer).ExecuteIntersectionQuery(geometry, ds);
+        }
+
+        public bool IsQueryEnabled
+        {
+            get { return _innerLayer.IsQueryEnabled; }
+            set { _innerLayer.IsQueryEnabled = value; }
+        }
+
+        protected internal bool RequiresRedraw
+        {
+            get
+            {
+                return _viewPort.RequiresRedraw;
+            }
+            set
+            {
+                _viewPort.RequiresRedraw = value;
+            }
+        }
+
         protected Size? LastRenderedSize
         {
-            get { return _lastRenderedSize; }
+            get { return _viewPort.Size; }
             set
             {
                 CheckUpdate(LastRenderedSize, value);
-                _lastRenderedSize = value;
+                _viewPort.Size = value;
             }
         }
 
-        private BoundingBox _lastRenderedExtents;
         protected BoundingBox LastRenderedExtents
         {
-            get { return _lastRenderedExtents; }
+            get { return _viewPort.BoundingBox; }
             set
             {
                 CheckUpdate(LastRenderedExtents, value);
-                _lastRenderedExtents = value;
+                _viewPort.BoundingBox = value;
             }
         }
 
-        private Bitmap _cachedBitmap;
         protected Bitmap CachedBitmap
         {
-            get { return _cachedBitmap; }
-            set { _cachedBitmap = value; }
+            get { return _viewPort.CachedBitmap; }
+            set { _viewPort.CachedBitmap = value; }
         }
 
         private void CheckUpdate<T>(T currentValue, T newValue)
@@ -446,8 +503,20 @@ namespace SharpMap.Layers
                 RequiresRedraw = true;
         }
 
-        public override void Render(Graphics g, Map map)
+        [MethodImpl(MethodImplOptions.Synchronized)]
+        public override void Render(Graphics g, MapViewport map)
         {
+            ViewPort viewport;
+
+            if (!_maps.TryGetValue(map.ID, out viewport))
+            {
+                viewport = new ViewPort();
+
+                _maps.Add(map.ID, viewport);
+            }
+
+            _viewPort = viewport;
+
             LastRenderedSize = map.Size;
             LastRenderedExtents = map.Envelope;
             if (RequiresRedraw || CachedBitmap == null)

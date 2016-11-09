@@ -1,6 +1,13 @@
-﻿using System.Drawing;
-using SharpMap;
+﻿using SharpMap;
 using SharpMap.Utilities;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using NetTopologySuite.Geometries;
+using SharpMap.Rendering;
 
 namespace GeoAPI.Geometries
 {
@@ -18,6 +25,103 @@ namespace GeoAPI.Geometries
         public static Coordinate Min(this Envelope self)
         {
             return new Coordinate(self.MinX, self.MinY);
+        }
+
+        /// <summary>
+        /// Ensures that a CoordinateSequence forms a valid ring, 
+        /// returning a new closed sequence of the correct length if required.
+        /// If the input sequence is already a valid ring, it is returned 
+        /// without modification.
+        /// If the input sequence is too short or is not closed, 
+        /// it is extended with one or more copies of the start point.
+        /// </summary>
+        /// <param name="fact">The CoordinateSequenceFactory to use to create the new sequence</param>
+        /// <param name="seq">The sequence to test</param>
+        /// <returns>The original sequence, if it was a valid ring, or a new sequence which is valid.</returns>
+        public static ICoordinateSequence EnsureValidRing(ICoordinateSequenceFactory fact, ICoordinateSequence seq)
+        {
+            var n = seq.Count;
+            // empty sequence is valid
+            if (n == 0) return seq;
+            // too short - make a new one
+            if (n <= 3)
+                return CreateClosedRing(fact, seq, 4);
+
+            var isClosed = Math.Abs(seq.GetOrdinate(0, Ordinate.X) - seq.GetOrdinate(n - 1, Ordinate.X)) < double.Epsilon &&
+                           Math.Abs(seq.GetOrdinate(0, Ordinate.Y) - seq.GetOrdinate(n - 1, Ordinate.Y)) < double.Epsilon;
+            if (isClosed) return seq;
+            // make a new closed ring
+            return CreateClosedRing(fact, seq, n + 1);
+        }
+
+        private static ICoordinateSequence CreateClosedRing(ICoordinateSequenceFactory fact, ICoordinateSequence seq, int size)
+        {
+            var newseq = fact.Create(size, seq.Dimension);
+            int n = seq.Count;
+            Copy(seq, 0, newseq, 0, n);
+            // fill remaining coordinates with start point
+            for (int i = n; i < size; i++)
+                Copy(seq, 0, newseq, i, 1);
+            return newseq;
+        }
+
+        ///<summary>
+        /// Copies a section of a <see cref="ICoordinateSequence"/> to another <see cref="ICoordinateSequence"/>.
+        /// The sequences may have different dimensions;
+        /// in this case only the common dimensions are copied.
+        ///</summary>
+        /// <param name="src">The sequence to copy coordinates from</param>
+        /// <param name="srcPos">The starting index of the coordinates to copy</param>
+        /// <param name="dest">The sequence to which the coordinates should be copied to</param>
+        /// <param name="destPos">The starting index of the coordinates in <see paramref="dest"/></param>
+        /// <param name="length">The number of coordinates to copy</param>
+        public static void Copy(ICoordinateSequence src, int srcPos, ICoordinateSequence dest, int destPos, int length)
+        {
+            for (int i = 0; i < length; i++)
+                CopyCoord(src, srcPos + i, dest, destPos + i);
+        }
+
+        ///<summary>
+        /// Copies a coordinate of a <see cref="ICoordinateSequence"/> to another <see cref="ICoordinateSequence"/>.
+        /// The sequences may have different dimensions;
+        /// in this case only the common dimensions are copied.
+        ///</summary>
+        /// <param name="src">The sequence to copy coordinate from</param>
+        /// <param name="srcPos">The index of the coordinate to copy</param>
+        /// <param name="dest">The sequence to which the coordinate should be copied to</param>
+        /// <param name="destPos">The index of the coordinate in <see paramref="dest"/></param>
+        public static void CopyCoord(ICoordinateSequence src, int srcPos, ICoordinateSequence dest, int destPos)
+        {
+            int minDim = Math.Min(src.Dimension, dest.Dimension);
+            for (int dim = 0; dim < minDim; dim++)
+            {
+                var ordinate = (Ordinate)dim;
+                double value = src.GetOrdinate(srcPos, ordinate);
+                dest.SetOrdinate(destPos, ordinate, value);
+            }
+        }
+
+        /// <summary>
+        /// Ensures that a CoordinateSequence forms a valid ring, 
+        /// returning a new closed sequence of the correct length if required.
+        /// If the input sequence is already a valid ring, it is returned 
+        /// without modification.
+        /// If the input sequence is too short or is not closed, 
+        /// it is extended with one or more copies of the start point.
+        /// </summary>
+        /// <param name="coordinates">List of coordinates</param>
+        /// <returns>The original sequence, if it was a valid ring, or a new sequence which is valid.</returns>
+        public static void EnsureValidRing(this List<Coordinate> coordinates)
+        {
+            var seq = GeometryServiceProvider.Instance.DefaultCoordinateSequenceFactory.Create(coordinates.ToArray());
+            seq = EnsureValidRing(GeometryServiceProvider.Instance.DefaultCoordinateSequenceFactory, seq);
+            if (seq.Count != coordinates.Count)
+            {
+                for (int i = coordinates.Count; i < seq.Count; i++)
+                {
+                    coordinates.Add(seq.GetCoordinate(i));
+                }
+            }
         }
 
         /// <summary>
@@ -164,7 +268,7 @@ namespace GeoAPI.Geometries
         /// <param name="self">The linestring</param>
         /// <param name="map">The map that defines the affine coordinate transformation</param>
         /// <returns>The array of <see cref="PointF"/>s</returns>
-        public static PointF[] TransformToImage(this ILineString self, Map map)
+        public static PointF[] TransformToImage(this ILineString self, MapViewport map)
         {
             return TransformToImage(self.Coordinates, map);
         }
@@ -175,11 +279,11 @@ namespace GeoAPI.Geometries
         /// <param name="vertices">The array of coordinates</param>
         /// <param name="map">The map that defines the affine coordinate transformation</param>
         /// <returns>The array of <see cref="PointF"/>s</returns>
-        private static PointF[] TransformToImage(Coordinate[] vertices, Map map)
+        private static PointF[] TransformToImage(Coordinate[] vertices, MapViewport map)
         {
             var v = new PointF[vertices.Length];
             for (var i = 0; i < vertices.Length; i++)
-                v[i] = Transform.WorldtoMap(vertices[i], map);
+                v[i] = map.WorldToImage(vertices[i]);
             return v;
         }
 
@@ -231,10 +335,28 @@ namespace GeoAPI.Geometries
         /// </summary>
         /// <param name="self">The polygon</param>
         /// <param name="map">The map that defines the affine coordinate transformation.</param>
+        /// <param name="useClipping">Use clipping for the polygon</param>
         /// <returns>An array of PointFs</returns>
-        public static PointF[] TransformToImage(this IPolygon self, Map map)
+        public static GraphicsPath TransformToImage(this IPolygon self, MapViewport map, bool useClipping = false)
         {
-            return TransformToImage(self.Coordinates, map);
+            var res = new GraphicsPath(FillMode.Alternate);
+            if (useClipping)
+            {
+                res.AddPolygon(VectorRenderer.ClipPolygon(
+                    self.ExteriorRing.TransformToImage(map), 
+                    map.Size.Width, map.Size.Height));
+                for (var i = 0; i < self.NumInteriorRings; i++)
+                    res.AddPolygon(VectorRenderer.ClipPolygon(
+                        self.GetInteriorRingN(i).TransformToImage(map),
+                        map.Size.Width, map.Size.Height));
+            }
+            else
+            {
+                res.AddPolygon(self.ExteriorRing.TransformToImage(map));
+                for (var i = 0; i < self.NumInteriorRings; i++)
+                    res.AddPolygon(self.GetInteriorRingN(i).TransformToImage(map));
+            }
+            return res;
         }
 
         /// <summary>
@@ -261,5 +383,26 @@ namespace GeoAPI.Geometries
             var reader = new NetTopologySuite.IO.WKTReader(factory);
             return reader.Read(wkt);
         }
+
+
+        private static readonly FieldInfo _envFi;
+        static GeoAPIEx()
+        {
+            try
+            {
+                _envFi = typeof(Geometry).GetField("_envelope", BindingFlags.Instance | BindingFlags.NonPublic);
+            }
+            catch{}
+        }
+
+        public static void SetExtent(Geometry geom, Envelope envelope)
+        {
+            if (geom == null)
+                return;
+
+            if (_envFi != null)
+                _envFi.SetValue(geom, envelope);
+        }
+
     }
 }

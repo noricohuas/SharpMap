@@ -13,7 +13,7 @@ namespace SharpMap.Layers
     /// <param name="sourceWidth">The tiles width</param>
     /// <param name="sourceHeight">The tiles height</param>
     /// <param name="imageAttributes">The <see cref="ImageAttributes"/> to use when rendering the tile</param>
-    public delegate void MapNewTileAvaliabledHandler(TileLayer sender, Envelope bbox, Bitmap bm, int sourceWidth, int sourceHeight, ImageAttributes imageAttributes);
+    public delegate void MapNewTileAvaliabledHandler(ITileAsyncLayer sender, Envelope bbox, Bitmap bm, int sourceWidth, int sourceHeight, ImageAttributes imageAttributes);
 
     /// <summary>
     /// Delegate for notifying download of tiles
@@ -37,7 +37,7 @@ namespace SharpMap.Layers
         event DownloadProgressHandler DownloadProgressChanged;
 
         /// <summary>
-        /// Gets or Sets a value indicating if to redraw the map only when all tiles are downloaded
+        /// Gets or sets a value indicating if to redraw the map only when all tiles are downloaded
         /// </summary>
         bool OnlyRedrawWhenComplete { get; set; }
 

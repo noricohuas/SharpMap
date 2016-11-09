@@ -202,9 +202,9 @@
             /// <summary>
             /// Returns the style based on a feature
             /// </summary>
-            /// <param name="feature">Set of attribute values to calculate the <see cref="SharpMap.Styles.IStyle"/> from</param>
+            /// <param name="attribute">Set of attribute values to calculate the <see cref="SharpMap.Styles.IStyle"/> from</param>
             /// <returns>The style</returns>
-            public SharpMap.Styles.IStyle GetStyle(GeoAPI.Features.IFeature feature)
+            public SharpMap.Styles.IStyle GetStyle(SharpMap.Data.FeatureDataRow attribute)
             {
                 var res = _style;
 

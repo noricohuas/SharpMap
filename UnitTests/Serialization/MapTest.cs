@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Drawing;
 using System.IO;
+using BruTile.Predefined;
 using BruTile.Web;
 using GeoAPI.CoordinateSystems.Transformations;
 using GeoAPI.Geometries;
@@ -10,8 +11,6 @@ using SharpMap;
 using SharpMap.Data.Providers;
 using SharpMap.Layers;
 using SharpMap.Styles;
-
-#if !DotSpatialProjections
 
 namespace UnitTests.Serialization
 {
@@ -23,7 +22,7 @@ namespace UnitTests.Serialization
         public void TestMap1()
         {
             var m = new Map(_mapSize);
-            m.Layers.Add(new VectorLayer("tmp", new FeatureProvider(
+            m.Layers.Add(new VectorLayer("tmp", new GeometryProvider(
                 new LineString(new [] {new Coordinate(0, 0), new Coordinate(10, 10), }))));
 
             m.ZoomToExtents();
@@ -73,9 +72,9 @@ namespace UnitTests.Serialization
         public void TestMap2()
         {
             var m = new Map(_mapSize);
-            m.BackgroundLayer.Add(new TileLayer(new OsmTileSource(new OsmRequest(KnownTileServers.MapQuest)), "MapQuest"));
+            m.BackgroundLayer.Add(new TileLayer(KnownTileSources.Create(KnownTileSource.MapQuest), "MapQuest"));
             
-            var codeBase = Path.GetDirectoryName(GetType().Assembly.CodeBase);
+            var codeBase = Path.GetDirectoryName(new Uri(GetType().Assembly.CodeBase).LocalPath);
             var cn = string.Format("Data Source={0};",
                                    Path.Combine(new Uri(codeBase).LocalPath, "TestData", "osm_aurich.sqlite"));
             
@@ -110,7 +109,7 @@ namespace UnitTests.Serialization
             }
 
             var f = GetFormatter();
-            BruTile.Utility.AddBruTileSurrogates(GetFormatter());
+            //BruTile.Utility.AddBruTileSurrogates(GetFormatter());
 
             Map mD = null;
             Assert.DoesNotThrow(() => mD = SandD(m, f));
@@ -129,4 +128,3 @@ namespace UnitTests.Serialization
         }
     }
 }
-#endif

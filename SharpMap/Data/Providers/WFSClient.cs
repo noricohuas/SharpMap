@@ -3,14 +3,15 @@
 
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Linq;
 using System.Net;
-using System.Threading;
-using GeoAPI.Features;
+using System.Xml.XPath;
 using GeoAPI.Geometries;
-using SharpMap.Features;
+using SharpMap.CoordinateSystems;
+using SharpMap.Utilities.Indexing;
+using SharpMap.Utilities.SpatialIndexing;
 using SharpMap.Utilities.Wfs;
 
 namespace SharpMap.Data.Providers
@@ -18,7 +19,7 @@ namespace SharpMap.Data.Providers
     /// <summary>
     /// WFS dataprovider
     /// This provider can be used to obtain data from an OGC Web Feature Service.
-    /// It performs the following requests: 'GetCapabilities', 'DescribeFeatureType' and 'GetFeatureByOid'.
+    /// It performs the following requests: 'GetCapabilities', 'DescribeFeatureType' and 'GetFeature'.
     /// This class is optimized for performing requests to GeoServer (http://geoserver.org).
     /// Supported geometries are:
     /// - PointPropertyType
@@ -101,7 +102,7 @@ namespace SharpMap.Data.Providers
     ///layer5.Style.Fill = new SolidBrush(Color.LightBlue);
     ///
     /// // Labels
-    /// // Labels are collected when parsing the geometry. So there's just one 'GetFeatureByOid' call necessary.
+    /// // Labels are collected when parsing the geometry. So there's just one 'GetFeature' call necessary.
     /// // Otherwise (when calling twice for retrieving labels) there may be an inconsistent read...
     /// // If a label property is set, the quick geometry option is automatically set to 'false'.
     ///prov3.Label = "STATE_NAME";
@@ -155,7 +156,7 @@ namespace SharpMap.Data.Providers
     ///this.mapImage1.Image = demoMap.GetMap();
     /// </code> 
     ///</example>
-    public class WFS : IProvider
+    public partial class WFS : IProvider
     {
         #region Enumerations
 
@@ -192,7 +193,13 @@ namespace SharpMap.Data.Providers
         private WfsFeatureTypeInfo _featureTypeInfo;
         private IXPathQueryManager _featureTypeInfoQueryManager;
         private bool _isOpen;
-        private IFeatureCollection _labelInfo;
+        private FeatureDataTable _labelInfo;
+        private int[] _axisOrder;
+
+        /// <summary>
+        /// Tree used for fast query of data
+        /// </summary>
+        private ISpatialIndex<uint> _tree;
 
         private string _nsPrefix;
 
@@ -228,8 +235,38 @@ namespace SharpMap.Data.Providers
         }
 
         /// <summary>
+        /// Gets or sets a value indicating the axis order
+        /// </summary>
+        /// <remarks>
+        /// The axis order is an array of array offsets. It can be einter {0, 1} or {1, 0}.
+        /// <para/>If not set explictly, <see cref="AxisOrderRegistry"/> is asked for a value based on <see cref="SRID"/>.</remarks>
+        public int[] AxisOrder
+        {
+            get { return _axisOrder ?? new AxisOrderRegistry()[SRID.ToString(NumberFormatInfo.InvariantInfo)]; }
+            set
+            {
+                if (value != null)
+                {
+                    if (value.Length != 2)
+                        throw new ArgumentException("Axis order array must have 2 elements");
+                    if (!((value[0] == 0 && value[1] == 1)||
+                          (value[0] == 1 && value[1] == 0)))
+                        throw new ArgumentException("Axis order array values must be 0 or 1");
+                    if (value[0] + value[1] != 1)
+                        throw new ArgumentException("Sum of values in axis order array must 1");
+                }
+                _axisOrder = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets a value indicating the spatial index factory
+        /// </summary>
+        public static ISpatialIndexFactory<uint> SpatialIndexFactory = new QuadTreeFactory();
+
+        /// <summary>
         /// Gets or sets a value indicating whether extracting geometry information 
-        /// from 'GetFeatureByOid' response shall be done quickly without paying attention to
+        /// from 'GetFeature' response shall be done quickly without paying attention to
         /// context validation, polygon boundaries and multi-geometries.
         /// This option accelerates the geometry parsing process, 
         /// but in scarce cases can lead to errors. 
@@ -241,7 +278,7 @@ namespace SharpMap.Data.Providers
         }
 
         /// <summary>
-        /// Gets or sets a value indicating whether the 'GetFeatureByOid' parser
+        /// Gets or sets a value indicating whether the 'GetFeature' parser
         /// should ignore multi-geometries (MultiPoint, MultiLineString, MultiCurve, MultiPolygon, MultiSurface). 
         /// By default it does not. Ignoring multi-geometries can lead to a better performance.
         /// </summary>
@@ -252,7 +289,7 @@ namespace SharpMap.Data.Providers
         }
 
         /// <summary>
-        /// Gets or sets a value indicating whether the 'GetFeatureByOid' request
+        /// Gets or sets a value indicating whether the 'GetFeature' request
         /// should be done with HTTP GET. This option can be important when obtaining
         /// data from a WFS provided by an UMN MapServer.
         /// </summary>
@@ -289,6 +326,15 @@ namespace SharpMap.Data.Providers
             set { _httpClientUtil.Credentials = value; }
         }
 
+        /// <summary>
+        /// Gets and sets the proxy Url of the request. 
+        /// </summary>
+        public string ProxyUrl
+        {
+            get { return _httpClientUtil.ProxyUrl; }
+            set { _httpClientUtil.ProxyUrl = value; }
+        }
+
         #endregion
 
         #region Constructors
@@ -306,15 +352,16 @@ namespace SharpMap.Data.Providers
         /// Specifying the geometry type helps to accelerate the rendering process, 
         /// if the geometry type in 'DescribeFeatureType is unprecise.   
         /// </param>
+        /// <param name="proxyUrl">Optional Proxy url</param>
         /// <param name="wfsVersion">The desired WFS Server version.</param>
         public WFS(string getCapabilitiesURI, string nsPrefix, string featureType, GeometryTypeEnum geometryType,
-                   WFSVersionEnum wfsVersion)
+                   WFSVersionEnum wfsVersion, string proxyUrl = null)
         {
             _getCapabilitiesUri = getCapabilitiesURI;
 
             if (wfsVersion == WFSVersionEnum.WFS1_0_0)
                 _textResources = new WFS_1_0_0_TextResources();
-            else
+            else 
                 _textResources = new WFS_1_1_0_TextResources();
 
             _wfsVersion = wfsVersion;
@@ -328,6 +375,7 @@ namespace SharpMap.Data.Providers
             }
 
             _geometryType = geometryType;
+            ProxyUrl = proxyUrl;
             GetFeatureTypeInfo();
         }
 
@@ -435,14 +483,16 @@ namespace SharpMap.Data.Providers
         /// </param>
         /// <param name="featureType">The name of the feature type</param>
         /// <param name="wfsVersion">The desired WFS Server version.</param>
+        /// <param name="proxyUrl">Optional proxy url</param>
         public WFS(IXPathQueryManager getCapabilitiesCache, string nsPrefix, string featureType,
-                   GeometryTypeEnum geometryType, WFSVersionEnum wfsVersion)
+                   GeometryTypeEnum geometryType, WFSVersionEnum wfsVersion, string proxyUrl = null)
         {
             _featureTypeInfoQueryManager = getCapabilitiesCache;
 
             if (wfsVersion == WFSVersionEnum.WFS1_0_0)
                 _textResources = new WFS_1_0_0_TextResources();
-            else _textResources = new WFS_1_1_0_TextResources();
+            else 
+                _textResources = new WFS_1_1_0_TextResources();
 
             _wfsVersion = wfsVersion;
 
@@ -455,6 +505,7 @@ namespace SharpMap.Data.Providers
             }
 
             _geometryType = geometryType;
+            ProxyUrl = proxyUrl;
             GetFeatureTypeInfo();
         }
 
@@ -486,38 +537,324 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="bbox"></param>
         /// <returns>Features within the specified <see cref="GeoAPI.Geometries.Envelope"/></returns>
-        public IEnumerable<IGeometry> GetGeometriesInView(Envelope bbox, CancellationToken? cancellationToken = null)
+        public virtual Collection<IGeometry> GetGeometriesInView(Envelope bbox)
         {
-            if (_featureTypeInfo == null) return null;
+            if (_featureTypeInfo == null) 
+                return null;
 
-            var geoms = new Collection<IGeometry>();
+            // if cache is not enabled make a call to server with the provided bounding box
+            if (!UseCache || Label == null)
+            {
+                _tree = null;
+                return LoadGeometries(bbox);
+            }
 
-            string geometryTypeString = _featureTypeInfo.Geometry._GeometryType;
+            // if cache is enabled but data is not downloaded then make a server call with an infinite envelope to download all the geometries
+            if (_labelInfo == null)
+            {
+                LoadGeometries(new Envelope(double.MinValue, double.MaxValue, double.MinValue, double.MaxValue));
+
+                // creates the spatial index
+                var extent = GetExtents();
+
+                _tree = SpatialIndexFactory.Create(extent, _labelInfo.Count,
+                    _labelInfo.Rows
+                        .Cast<FeatureDataRow>()
+                        .Select((row, idx) => SpatialIndexFactory.Create((uint) idx, row.Geometry.EnvelopeInternal)));
+            }
+
+            // we then must filter the geometries locally
+            var ids = _tree.Search(bbox);
+
+            var coll = new Collection<IGeometry>();
+            for (var i = 0; i < ids.Count; i++)
+            {
+                var featureRow = (FeatureDataRow) _labelInfo.Rows[(int)ids[i]];
+                coll.Add(featureRow.Geometry);
+            }
+
+            return coll;
+        }
+
+        /// <summary>
+        /// Returns all objects whose <see cref="GeoAPI.Geometries.Envelope"/> intersects 'bbox'.
+        /// </summary>
+        /// <remarks>
+        /// This method is usually much faster than the QueryFeatures method, because intersection tests
+        /// are performed on objects simplified by their <see cref="GeoAPI.Geometries.Envelope"/>, and using the Spatial Index
+        /// </remarks>
+        /// <param name="bbox">Box that objects should intersect</param>
+        /// <returns></returns>
+        /// <exception cref="Exception">Thrown in any case</exception>
+        public virtual Collection<uint> GetObjectIDsInView(Envelope bbox)
+        {
+            throw new Exception("The method or operation is not implemented.");
+        }
+
+        /// <summary>
+        /// Returns the geometry corresponding to the Object ID
+        /// </summary>
+        /// <param name="oid">Object ID</param>
+        /// <returns>geometry</returns>
+        /// <exception cref="Exception">Thrown in any case</exception>
+        public virtual IGeometry GetGeometryByID(uint oid)
+        {
+            throw new Exception("The method or operation is not implemented.");
+        }
+
+        /// <summary>
+        /// Returns the data associated with all the geometries that are intersected by 'geom'
+        /// </summary>
+        /// <param name="geom">Geometry to intersect with</param>
+        /// <param name="ds">FeatureDataSet to fill data into</param>
+        public virtual void ExecuteIntersectionQuery(IGeometry geom, FeatureDataSet ds)
+        {
+            if (_labelInfo == null) return;
+
+            var table = _labelInfo.Clone();
+
+            if (_tree != null)
+            {
+                // use the index for fast query
+                var ids = _tree.Search(geom.EnvelopeInternal);
+                for (var i = 0; i < ids.Count; i++)
+                {
+                    var featureRow = (FeatureDataRow)_labelInfo.Rows[(int)ids[i]];
+                    var featureGeometry = featureRow.Geometry;
+                    if (featureGeometry.Intersects(geom))
+                    {
+                        var newRow = (FeatureDataRow) table.Rows.Add(featureRow.ItemArray);
+                        newRow.Geometry = featureGeometry;
+                    }
+                }
+            }
+            else
+            {
+                for (var i = 0; i < _labelInfo.Rows.Count; i++)
+                {
+                    var featureRow = (FeatureDataRow) _labelInfo.Rows[i];
+                    var featureGeometry = featureRow.Geometry;
+                    if (featureGeometry.Intersects(geom))
+                    {
+                        var newRow = (FeatureDataRow) table.Rows.Add(featureRow.ItemArray);
+                        newRow.Geometry = featureGeometry;
+                    }
+                }
+            }
+            ds.Tables.Add(table);
+            // Destroy internal reference if cache is disabled
+            if (!UseCache)
+                _labelInfo = null;
+        }
+
+
+        /// <summary>
+        /// Returns the data associated with all the geometries that are intersected by 'geom'
+        /// </summary>
+        /// <param name="box">Geometry to intersect with</param>
+        /// <param name="ds">FeatureDataSet to fill data into</param>
+        public virtual void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
+        {
+            if (_labelInfo == null) return;
+
+            var table = _labelInfo.Clone();
+
+            if (_tree != null)
+            {
+                // use the index for fast query
+                
+                var ids = _tree.Search(box);
+                for (var i = 0; i < ids.Count; i++)
+                {
+                    var featureRow = (FeatureDataRow)_labelInfo.Rows[(int)ids[i]];
+                    var featureGeometry = featureRow.Geometry;
+                    var newRow = (FeatureDataRow)table.Rows.Add(featureRow.ItemArray);
+                    newRow.Geometry = featureGeometry;
+                }
+            }
+            else
+            {
+                // we must filter the geometries locally
+                for (var i = 0; i < _labelInfo.Rows.Count; i++)
+                {
+                    var featureRow = (FeatureDataRow) _labelInfo.Rows[i];
+                    var featureGeometry = featureRow.Geometry;
+                    if (box.Intersects(featureGeometry.EnvelopeInternal))
+                    {
+                        var newRow = (FeatureDataRow) table.Rows.Add(featureRow.ItemArray);
+                        newRow.Geometry = featureGeometry;
+                    }
+                }
+            }
+            ds.Tables.Add(table);
+            // Destroy internal reference
+            if (!UseCache)
+                _labelInfo = null;
+        }
+
+        /// <summary>
+        /// Returns the number of features in the dataset
+        /// </summary>
+        /// <returns>number of features</returns>
+        /// <exception cref="Exception">Thrown in any case</exception>
+        public virtual int GetFeatureCount()
+        {
+            throw new Exception("The method or operation is not implemented.");
+        }
+
+        /// <summary>
+        /// Returns a <see cref="SharpMap.Data.FeatureDataRow"/> based on a RowID
+        /// </summary>
+        /// <param name="rowId">The id of the row.</param>
+        /// <returns>datarow</returns>
+        /// <exception cref="Exception">Thrown in any case</exception>
+        public virtual FeatureDataRow GetFeature(uint rowId)
+        {
+            throw new Exception("The method or operation is not implemented.");
+        }
+
+        /// <summary>
+        /// The <see cref="Envelope"/> of dataset
+        /// </summary>
+        /// <returns>The 2d extent of the layer</returns>
+        public virtual Envelope GetExtents()
+        {
+            if (!UseCache || _labelInfo == null || _labelInfo.Rows.Count == 0)
+            {
+                return new Envelope(new Coordinate(_featureTypeInfo.BBox._MinLong, _featureTypeInfo.BBox._MinLat),
+                    new Coordinate(_featureTypeInfo.BBox._MaxLong, _featureTypeInfo.BBox._MaxLat));
+            }
+
+            // here we try to fix a problem that happens when the server provides an incorrect bounding box for the data
+            // we simply calculate the extent from all the geometries we got.
+
+            Envelope env = null;
+
+            for (var i = 0; i < _labelInfo.Rows.Count; i++)
+            {
+                var featureRow = (FeatureDataRow)_labelInfo.Rows[i];
+                var geom = featureRow.Geometry;
+
+                env = env == null ? geom.EnvelopeInternal : env.ExpandedBy(geom.EnvelopeInternal);
+            }
+            return env;
+        }
+
+        /// <summary>
+        /// Gets the service-qualified name of the featuretype.
+        /// The service-qualified name enables the differentiation between featuretypes 
+        /// from different services with an equal qualified name and therefore can be
+        /// regarded as an ID for the featuretype.
+        /// </summary>
+        public string ConnectionID
+        {
+            get { return _featureTypeInfo.ServiceURI + "/" + _featureTypeInfo.QualifiedName; }
+        }
+
+        /// <summary>
+        /// Opens the datasource
+        /// </summary>
+        public virtual void Open()
+        {
+            _isOpen = true;
+        }
+
+        /// <summary>
+        /// Closes the datasource
+        /// </summary>
+        public virtual void Close()
+        {
+            _isOpen = false;
+            _httpClientUtil.Close();
+        }
+
+        /// <summary>
+        /// Returns true if the datasource is currently open
+        /// </summary>
+        public bool IsOpen
+        {
+            get { return _isOpen; }
+        }
+
+        /// <summary>
+        /// The spatial reference ID (CRS)
+        /// </summary>
+        public virtual int SRID
+        {
+            get { return Convert.ToInt32(_featureTypeInfo.SRID); }
+            set { _featureTypeInfo.SRID = value.ToString(); }
+        }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether caching is enabled.
+        /// </summary>
+        /// <remarks>
+        /// When cache is enabled all geometries are downloaded from server depending on the OGC filter set, 
+        /// and then cached on client to fullfill next requests.
+        /// </remarks>
+        public bool UseCache { get; set; }
+
+        #endregion
+
+        #region IDisposable Member
+
+        /// <summary>
+        /// Method to perform cleanup work
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    _featureTypeInfoQueryManager = null;
+                    _labelInfo = null;
+                    _httpClientUtil.Close();
+                }
+                _disposed = true;
+            }
+        }
+
+        #endregion
+
+        #region Private Member
+
+        private Collection<IGeometry> LoadGeometries(Envelope bbox)
+        {
+            var geometryTypeString = _featureTypeInfo.Geometry._GeometryType;
 
             GeometryFactory geomFactory = null;
 
-            if (!string.IsNullOrEmpty(_label))
+            if (UseCache)
             {
-                var ff = FeatureFactory.CreateInt32(GeoAPI.GeometryServiceProvider.Instance.CreateGeometryFactory(SRID),
-                    new FeatureAttributeDefinition
-                    {
-                        AttributeName = "Label",
-                        Default = string.Empty,
-                        AttributeType = typeof(string),
-                        IsNullable = true
-                    });
-                _labelInfo = new FeatureCollection<int>(ff);
+                // we want to download all the elements of the feature
+                _labelInfo = new FeatureDataTable();
+                foreach (var element in FeatureTypeInfo.Elements)
+                    _labelInfo.Columns.Add(element.Name);
+
+                _quickGeometries = false;
+            }
+            else if (!string.IsNullOrEmpty(_label))
+            {
+                _labelInfo = new FeatureDataTable();
+                _labelInfo.Columns.Add(_label);
                 // Turn off quick geometries, if a label is applied...
                 _quickGeometries = false;
             }
 
-            // Configuration for GetFeatureByOid request */
+            // Configuration for GetFeature request */
             WFSClientHTTPConfigurator config = new WFSClientHTTPConfigurator(_textResources);
             config.configureForWfsGetFeatureRequest(_httpClientUtil, _featureTypeInfo, _label, bbox, _ogcFilter,
-                                                    _getFeatureGETRequest);
+                                                    _getFeatureGETRequest, UseCache);
 
             try
             {
+                Collection<IGeometry> geoms;
                 switch (geometryTypeString)
                 {
                     /* Primitive geometry elements */
@@ -595,14 +932,17 @@ namespace SharpMap.Data.Providers
                         geomFactory = new UnspecifiedGeometryFactory_WFS1_0_0_GML2(_httpClientUtil, _featureTypeInfo,
                                                                                    _multiGeometries, _quickGeometries,
                                                                                    _labelInfo);
+
+                        geomFactory.AxisOrder = AxisOrder;
                         geoms = geomFactory.createGeometries();
+
                         return geoms;
                 }
 
+                geomFactory.AxisOrder = AxisOrder;
                 geoms = _quickGeometries
                             ? geomFactory.createQuickGeometries(geometryTypeString)
                             : geomFactory.createGeometries();
-                geomFactory.Dispose();
 
                 return geoms;
             }
@@ -615,166 +955,6 @@ namespace SharpMap.Data.Providers
                 }
             }
         }
-
-        /// <summary>
-        /// Returns all objects whose <see cref="GeoAPI.Geometries.Envelope"/> intersects 'bbox'.
-        /// </summary>
-        /// <remarks>
-        /// This method is usually much faster than the QueryFeatures method, because intersection tests
-        /// are performed on objects simplified by their <see cref="GeoAPI.Geometries.Envelope"/>, and using the Spatial Index
-        /// </remarks>
-        /// <param name="bbox">Box that objects should intersect</param>
-        /// <returns></returns>
-        /// <exception cref="Exception">Thrown in any case</exception>
-        public IEnumerable<object> GetOidsInView(Envelope bbox, CancellationToken? cancellationToken = null)
-        {
-            throw new Exception("The method or operation is not implemented.");
-        }
-
-        /// <summary>
-        /// Returns the geometry corresponding to the Object ID
-        /// </summary>
-        /// <param name="oid">Object ID</param>
-        /// <returns>geometry</returns>
-        /// <exception cref="Exception">Thrown in any case</exception>
-        public IGeometry GetGeometryByOid(object oid)
-        {
-            throw new Exception("The method or operation is not implemented.");
-        }
-
-        /// <summary>
-        /// Returns the data associated with all the geometries that are intersected by 'geom'
-        /// </summary>
-        /// <param name="geom">Geometry to intersect with</param>
-        /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null)
-        {
-            if (_labelInfo == null) return;
-            ds.Add(_labelInfo);
-            // Destroy internal reference
-            _labelInfo = null;
-        }
-
-
-        /// <summary>
-        /// Returns the data associated with all the geometries that are intersected by 'geom'
-        /// </summary>
-        /// <param name="box">Geometry to intersect with</param>
-        /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null)
-        {
-            if (_labelInfo == null) return;
-            ds.Add(_labelInfo);
-            // Destroy internal reference
-            _labelInfo = null;
-        }
-
-        /// <summary>
-        /// Returns the number of features in the dataset
-        /// </summary>
-        /// <returns>number of features</returns>
-        /// <exception cref="Exception">Thrown in any case</exception>
-        public int GetFeatureCount()
-        {
-            throw new Exception("The method or operation is not implemented.");
-        }
-
-        /// <summary>
-        /// Returns a <see cref="T:GeoAPI.Features.IFeature"/> based on a RowID
-        /// </summary>
-        /// <param name="rowId">The id of the row.</param>
-        /// <returns>datarow</returns>
-        /// <exception cref="Exception">Thrown in any case</exception>
-        public IFeature GetFeatureByOid(object rowId)
-        {
-            throw new Exception("The method or operation is not implemented.");
-        }
-
-        /// <summary>
-        /// The <see cref="Envelope"/> of dataset
-        /// </summary>
-        /// <returns>The 2d extent of the layer</returns>
-        public Envelope GetExtents()
-        {
-            return new Envelope(new Coordinate(_featureTypeInfo.BBox._MinLong, _featureTypeInfo.BBox._MinLat),
-                                new Coordinate(_featureTypeInfo.BBox._MaxLong, _featureTypeInfo.BBox._MaxLat));
-        }
-
-        /// <summary>
-        /// Gets the service-qualified name of the featuretype.
-        /// The service-qualified name enables the differentiation between featuretypes 
-        /// from different services with an equal qualified name and therefore can be
-        /// regarded as an ID for the featuretype.
-        /// </summary>
-        public string ConnectionID
-        {
-            get { return _featureTypeInfo.ServiceURI + "/" + _featureTypeInfo.QualifiedName; }
-        }
-
-        /// <summary>
-        /// Opens the datasource
-        /// </summary>
-        public void Open()
-        {
-            _isOpen = true;
-        }
-
-        /// <summary>
-        /// Closes the datasource
-        /// </summary>
-        public void Close()
-        {
-            _isOpen = false;
-            _httpClientUtil.Close();
-        }
-
-        /// <summary>
-        /// Returns true if the datasource is currently open
-        /// </summary>
-        public bool IsOpen
-        {
-            get { return _isOpen; }
-        }
-
-        /// <summary>
-        /// The spatial reference ID (CRS)
-        /// </summary>
-        public int SRID
-        {
-            get { return Convert.ToInt32(_featureTypeInfo.SRID); }
-            set { _featureTypeInfo.SRID = value.ToString(); }
-        }
-
-        #endregion
-
-        #region IDisposable Member
-
-        /// <summary>
-        /// Method to perform cleanup work
-        /// </summary>
-        public void Dispose()
-        {
-            Dispose(true);
-        }
-
-        internal void Dispose(bool disposing)
-        {
-            if (!_disposed)
-            {
-                if (disposing)
-                {
-                    _featureTypeInfoQueryManager = null;
-                    _labelInfo = null;
-                    _httpClientUtil.Close();
-                }
-                _disposed = true;
-            }
-        }
-
-        #endregion
-
-        #region Private Member
-
         /// <summary>
         /// This method gets metadata about the featuretype to query from 'GetCapabilities' and 'DescribeFeatureType'.
         /// </summary>
@@ -809,10 +989,10 @@ namespace SharpMap.Data.Providers
                     _featureTypeInfoQueryManager.AddNamespace(_textResources.NSXLINKPREFIX, _textResources.NSXLINK);
                 }
 
-                /* Service URI (for WFS GetFeatureByOid request) */
+                /* Service URI (for WFS GetFeature request) */
                 _featureTypeInfo.ServiceURI = _featureTypeInfoQueryManager.GetValueFromNode
                     (_featureTypeInfoQueryManager.Compile(_textResources.XPATH_GETFEATURERESOURCE));
-                /* If no GetFeatureByOid URI could be found, try GetCapabilities URI */
+                /* If no GetFeature URI could be found, try GetCapabilities URI */
                 if (_featureTypeInfo.ServiceURI == null) _featureTypeInfo.ServiceURI = _getCapabilitiesUri;
                 else if (_featureTypeInfo.ServiceURI.EndsWith("?", StringComparison.Ordinal))
                     _featureTypeInfo.ServiceURI =
@@ -828,19 +1008,19 @@ namespace SharpMap.Data.Providers
                         describeFeatureTypeUri.Remove(describeFeatureTypeUri.Length - 1);
 
                 /* Spatial reference ID */
-                _featureTypeInfo.SRID = _featureTypeInfoQueryManager.GetValueFromNode(
+                var crs = _featureTypeInfoQueryManager.GetValueFromNode(
                     _featureTypeInfoQueryManager.Compile(_textResources.XPATH_SRS),
-                    new[] { new DictionaryEntry("_param1", featureQueryName) });
+                    new[] {new DictionaryEntry("_param1", featureQueryName)});
                 /* If no SRID could be found, try '4326' by default */
-                if (_featureTypeInfo.SRID == null) _featureTypeInfo.SRID = "4326";
+                if (crs == null) _featureTypeInfo.SRID = "4326";
                 else
                     /* Extract number */
-                    _featureTypeInfo.SRID = _featureTypeInfo.SRID.Substring(_featureTypeInfo.SRID.LastIndexOf(":") + 1);
+                    _featureTypeInfo.SRID = crs.Substring(crs.LastIndexOf(":") + 1);
 
                 /* Bounding Box */
                 IXPathQueryManager bboxQuery = _featureTypeInfoQueryManager.GetXPathQueryManagerInContext(
                     _featureTypeInfoQueryManager.Compile(_textResources.XPATH_BBOX),
-                    new[] { new DictionaryEntry("_param1", featureQueryName) });
+                    new[] {new DictionaryEntry("_param1", featureQueryName)});
 
                 if (bboxQuery != null)
                 {
@@ -917,6 +1097,21 @@ namespace SharpMap.Data.Providers
                                     ? bboxVal.Substring(0, bboxVal.IndexOf(' ') + 1)
                                     : "0.0", formatInfo);
 
+                    if (SRID != 4326)
+                    {
+                        // we must to transform the bbox coordinates into the SRS projection
+                        var transformation = Session.Instance.CoordinateSystemServices.CreateTransformation(4326, SRID);
+                        if (transformation == null)
+                            throw new InvalidOperationException("Can't transform geometries to layer SRID");
+
+                        var maxPoint = transformation.MathTransform.Transform(new[] { bbox._MaxLong, bbox._MaxLat });
+                        var minPoint = transformation.MathTransform.Transform(new[] { bbox._MinLong, bbox._MinLat });
+
+                        bbox._MaxLong = maxPoint[0];
+                        bbox._MaxLat = maxPoint[1];
+                        bbox._MinLong = minPoint[0];
+                        bbox._MinLat = minPoint[1];
+                    }
                     _featureTypeInfo.BBox = bbox;
                 }
 
@@ -961,6 +1156,24 @@ namespace SharpMap.Data.Providers
                     /* Just, if not set manually... */
                     if (geomType == null)
                         geomType = geomQuery.GetValueFromNode(geomQuery.Compile(_textResources.XPATH_TYPEATTRIBUTEQUERY));
+
+                    /* read all the elements */
+                    var iterator = geomQuery.GetIterator(geomQuery.Compile("//ancestor::xs:sequence/xs:element"));
+                    foreach (XPathNavigator node in iterator)
+                    {
+                        node.MoveToAttribute("type", string.Empty);
+                        var type = node.Value;
+
+                        if (type.StartsWith("gml:")) // we skip geometry element cause we already found it
+                            continue;
+
+                        node.MoveToParent();
+
+                        node.MoveToAttribute("name", string.Empty);
+                        var name = node.Value;
+
+                        _featureTypeInfo.Elements.Add(new WfsFeatureTypeInfo.ElementInfo(name, type));
+                    }
                 }
                 else
                 {
@@ -1057,7 +1270,7 @@ namespace SharpMap.Data.Providers
                                     case "gml:multiSurfaceProperty":
                                         geomType = "MultiSurfacePropertyType";
                                         break;
-                                    // e.g. 'gml:_geometryProperty' 
+                                        // e.g. 'gml:_geometryProperty' 
                                     default:
                                         break;
                                 }
@@ -1072,7 +1285,7 @@ namespace SharpMap.Data.Providers
 
                 if (geomType == null)
                     /* Set geomType to an empty string in order to avoid exceptions.
-                    The geometry type is not necessary by all means - it can be detected in 'GetFeatureByOid' response too.. */
+                    The geometry type is not necessary by all means - it can be detected in 'GetFeature' response too.. */
                     geomType = string.Empty;
 
                 /* Remove prefix */
@@ -1165,13 +1378,13 @@ namespace SharpMap.Data.Providers
             }
 
             /// <summary>
-            /// Configures for WFS 'GetFeatureByOid' request using an instance implementing <see cref="SharpMap.Utilities.Wfs.IWFS_TextResources"/>.
+            /// Configures for WFS 'GetFeature' request using an instance implementing <see cref="SharpMap.Utilities.Wfs.IWFS_TextResources"/>.
             /// The <see cref="SharpMap.Utilities.Wfs.HttpClientUtil"/> instance is returned for immediate usage. 
             /// </summary>
             internal HttpClientUtil configureForWfsGetFeatureRequest(HttpClientUtil httpClientUtil,
                                                                      WfsFeatureTypeInfo featureTypeInfo,
                                                                      string labelProperty, Envelope boundingBox,
-                                                                     IFilter filter, bool GET)
+                                                                     IFilter filter, bool GET, bool loadAllElements)
             {
                 httpClientUtil.Reset();
                 httpClientUtil.Url = featureTypeInfo.ServiceURI;
@@ -1179,13 +1392,13 @@ namespace SharpMap.Data.Providers
                 if (GET)
                 {
                     /* HTTP-GET */
-                    httpClientUtil.Url += _WfsTextResources.GetFeatureGETRequest(featureTypeInfo, boundingBox, filter);
+                    httpClientUtil.Url += _WfsTextResources.GetFeatureGETRequest(featureTypeInfo, boundingBox, filter, loadAllElements);
                     return httpClientUtil;
                 }
 
                 /* HTTP-POST */
                 httpClientUtil.PostData = _WfsTextResources.GetFeaturePOSTRequest(featureTypeInfo, labelProperty,
-                                                                                  boundingBox, filter);
+                                                                                  boundingBox, filter, loadAllElements);
                 httpClientUtil.AddHeader(HttpRequestHeader.ContentType.ToString(), "text/xml");
                 return httpClientUtil;
             }

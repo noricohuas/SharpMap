@@ -7,7 +7,7 @@ namespace SharpMap.Forms.ToolBar
     [System.ComponentModel.DesignTimeVisible(true)]
     public class MapVariableLayerToolStrip : MapToolStrip
     {
-        private static readonly ILog Logger = LogManager.GetCurrentClassLogger();
+        private static readonly ILog Logger = LogManager.GetLogger(typeof(MapVariableLayerToolStrip));
 
         private System.Windows.Forms.ToolStripButton _enableVariableLayers;
         private System.Windows.Forms.ToolStripTextBox _interval;
@@ -51,6 +51,16 @@ namespace SharpMap.Forms.ToolBar
             this.ResumeLayout();
             this.PerformLayout();
             this.Visible = true;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _timer.Stop();
+                _timer = null;
+            }
+            base.Dispose(disposing);
         }
 
         protected override void OnMapControlChangingInternal(System.ComponentModel.CancelEventArgs e)

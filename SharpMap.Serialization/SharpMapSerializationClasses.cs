@@ -100,7 +100,14 @@ namespace SharpMap.Serialization.Model
 
     public class OsmLayer : MapLayer
     {
+        public string KnownTileSource { get; set; }
+
+        public string ApiKey { get; set; }
+
+        public bool Async { get; set; }
     }
+
+    /*
     public class GoogleLayer : MapLayer
     {
     }
@@ -110,6 +117,7 @@ namespace SharpMap.Serialization.Model
     public class GoogleTerrainLayer : MapLayer
     {
     }
+     */
     public class BingLayer : MapLayer
     {
     }

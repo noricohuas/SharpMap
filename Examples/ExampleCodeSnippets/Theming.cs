@@ -1,5 +1,3 @@
-using SharpMap.Features;
-
 namespace ExampleCodeSnippets
 {
     using cd = CreatingData;
@@ -57,13 +55,13 @@ namespace ExampleCodeSnippets
             return style;
         }
 
-        public SharpMap.Styles.VectorStyle GetRotatedSymol(GeoAPI.Features.IFeature row)
+        public SharpMap.Styles.VectorStyle GetRotatedSymol(SharpMap.Data.FeatureDataRow row)
         {
             if (!System.String.IsNullOrEmpty(StyleRotationColumn))
                 try
                 {
                     SharpMap.Styles.VectorStyle dataStyle = CloneStyle(DefaultStyle);
-                    dataStyle.SymbolRotation = System.Convert.ToSingle(row.Attributes[StyleRotationColumn]);
+                    dataStyle.SymbolRotation = System.Convert.ToSingle(row[StyleRotationColumn]);
                     return dataStyle;
                 }
                 catch { }
@@ -125,7 +123,7 @@ namespace ExampleCodeSnippets
             return style;
         }
 
-        public SharpMap.Styles.VectorStyle GetRotatedSymol(GeoAPI.Features.IFeature row)
+        public SharpMap.Styles.VectorStyle GetRotatedSymol(SharpMap.Data.FeatureDataRow row)
         {
             if (!System.String.IsNullOrEmpty(SymbolColumn))
                 try
@@ -134,7 +132,7 @@ namespace ExampleCodeSnippets
                     if (!row.IsNull(SymbolColumn))
                     {
                         dataStyle.Symbol = new System.Drawing.Bitmap(
-                            new System.IO.MemoryStream((byte[]) row.Attributes[SymbolColumn]));
+                            new System.IO.MemoryStream((byte[]) row[SymbolColumn]));
                     }
                     return dataStyle;
                 }
@@ -178,7 +176,7 @@ namespace ExampleCodeSnippets
 
 
             //Create layer and datasource
-            SharpMap.Layers.VectorLayer vl = new SharpMap.Layers.VectorLayer("Points", new SharpMap.Data.Providers.FeatureProvider(fdt));
+            SharpMap.Layers.VectorLayer vl = new SharpMap.Layers.VectorLayer("Points", new SharpMap.Data.Providers.GeometryFeatureProvider(fdt));
             
             //Create default style
             SharpMap.Styles.VectorStyle defaultStyle = new SharpMap.Styles.VectorStyle();
@@ -230,7 +228,7 @@ namespace ExampleCodeSnippets
 
 
             //Create layer and datasource
-            SharpMap.Layers.VectorLayer vl = new SharpMap.Layers.VectorLayer("Points", new SharpMap.Data.Providers.FeatureProvider(fdt));
+            SharpMap.Layers.VectorLayer vl = new SharpMap.Layers.VectorLayer("Points", new SharpMap.Data.Providers.GeometryFeatureProvider(fdt));
 
             //Create default style
             SharpMap.Styles.VectorStyle defaultStyle = new SharpMap.Styles.VectorStyle();
@@ -294,8 +292,8 @@ namespace ExampleCodeSnippets
             SharpMap.Data.Providers.ShapeFile sf = new SharpMap.Data.Providers.ShapeFile("cities.shp");
             SharpMap.Data.FeatureDataSet fds = new SharpMap.Data.FeatureDataSet();
             sf.ExecuteIntersectionQuery(sf.GetExtents(), fds);
-            SharpMap.Data.Providers.FeatureProvider gfp =
-                new SharpMap.Data.Providers.FeatureProvider(fds.Tables[0]);
+            SharpMap.Data.Providers.GeometryFeatureProvider gfp =
+                new SharpMap.Data.Providers.GeometryFeatureProvider(fds.Tables[0]);
 
             System.Data.DataTable dt = new System.Data.DataTable("external");
             dt.Columns.Add("city", typeof (string));

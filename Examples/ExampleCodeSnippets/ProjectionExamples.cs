@@ -13,7 +13,6 @@ namespace ExampleCodeSnippets
             "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.01745329251994328,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]";
 
 
-#if !DotSpatialProjections
         [NUnit.Framework.Test]
         [NUnit.Framework.Ignore]
         public void TestConversionProjNet()
@@ -27,22 +26,8 @@ namespace ExampleCodeSnippets
 
             System.Diagnostics.Debug.Assert(ct != null);
         }
-#else
-        [NUnit.Framework.Test, NUnit.Framework.ExpectedException("DotSpatial.Projections.ProjectionException")]
-        public void TestConversionDSProjection()
-        {
-            var pi1 = DotSpatial.Projections.ProjectionInfo.FromEsriString(Osgb36);
-            var pi2 = DotSpatial.Projections.ProjectionInfo.FromEsriString(WGS84);
 
-            var ct = new DotSpatial.Projections.CoordinateTransformation();
-            ct.Source = pi1;
-            ct.Target = pi2;
-
-
-        }
-#endif
-
-#if !DotSpatialProjections && alglib
+#if alglib
     /// <summary>
     /// Performs an affine 2D coordinate transfromation
     /// X' = _a*X + _b*Y + _c
@@ -453,5 +438,35 @@ namespace ExampleCodeSnippets
                 img.Save("ecw.png");
             }
         }
+
+public static void ReprojectFeatureDataSet(SharpMap.Data.FeatureDataSet fds,
+    GeoAPI.CoordinateSystems.ICoordinateSystem target)
+{
+    for (var i = 0; i < fds.Tables.Count; i ++)
+    {
+        var fdt = fds.Tables[i];
+        ReprojectFeatureDataTable(fdt, target);
+    }
+
+}
+
+public static void ReprojectFeatureDataTable(SharpMap.Data.FeatureDataTable fdt,
+    GeoAPI.CoordinateSystems.ICoordinateSystem target)
+{
+    var source = SharpMap.CoordinateSystems.CoordinateSystemExtensions.GetCoordinateSystem(fdt[0].Geometry);
+
+    var ctFactory = new ProjNet.CoordinateSystems.Transformations.CoordinateTransformationFactory();
+    var ct = ctFactory.CreateFromCoordinateSystems(source, target);
+            
+    var geomFactory = GeoAPI.GeometryServiceProvider.Instance.CreateGeometryFactory((int)target.AuthorityCode);
+
+    for (var i = 0; i < fdt.Rows.Count; i++)
+    {
+        var fdr = fdt[i];
+        fdr.Geometry =
+            GeoAPI.CoordinateSystems.Transformations.GeometryTransform.TransformGeometry(fdr.Geometry,
+                ct.MathTransform, geomFactory);
+    }
+}
     }
 }

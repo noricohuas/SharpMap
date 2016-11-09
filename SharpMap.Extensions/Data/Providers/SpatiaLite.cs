@@ -23,9 +23,7 @@ using System.Data;
 //using System.Diagnostics;
 using System.Data.SQLite;
 using System.Globalization;
-using System.Threading;
 using Common.Logging;
-using GeoAPI.Features;
 using GeoAPI.Geometries;
 using SharpMap.Converters.WellKnownBinary;
 using SharpMap.Converters.WellKnownText;
@@ -309,7 +307,7 @@ namespace SharpMap.Data.Providers
             }
         }
 
-        public override IEnumerable<IGeometry> GetGeometriesInView(Envelope bbox, CancellationToken? ct=null)
+        public override Collection<IGeometry> GetGeometriesInView(Envelope bbox)
         {
             var features = new Collection<IGeometry>();
             using (var conn = SpatiaLiteConnection(ConnectionString))
@@ -342,9 +340,9 @@ namespace SharpMap.Data.Providers
             return features;
         }
 
-        public override IEnumerable<object> GetOidsInView(Envelope bbox, CancellationToken?ct=null)
+        public override Collection<uint> GetObjectIDsInView(Envelope bbox)
         {
-            //var objectlist = new Collection<uint>();
+            var objectlist = new Collection<uint>();
             using (var conn = SpatiaLiteConnection(ConnectionString))
             {
                 string strSql = "SELECT " + ObjectIdColumn + " ";
@@ -361,25 +359,27 @@ namespace SharpMap.Data.Providers
                     {
                         while (dr.Read())
                         {
-                            if (dr[0] != DBNull.Value) 
-                                yield return dr[0];
+                            if (dr[0] == DBNull.Value) 
+                                continue;
+                            var id = Convert.ToUInt32(dr[0]);
+                            objectlist.Add(id);
                         }
                     }
                     conn.Close();
                 }
             }
+            return objectlist;
         }
 
-        public override IGeometry GetGeometryByOid(object oid)
+        public override IGeometry GetGeometryByID(uint oid)
         {
             IGeometry geom = null;
             using (var conn = SpatiaLiteConnection(ConnectionString))
             {
                 string strSql = "SELECT AsBinary(" + GeometryColumn + ") AS Geom FROM " + Table + " WHERE " +
-                                ObjectIdColumn + "=:POid";
+                                ObjectIdColumn + "='" + oid + "'";
                 using (var command = new SQLiteCommand(strSql, conn))
                 {
-                    command.Parameters.Add(new SQLiteParameter("POid", oid));
                     using (var dr = command.ExecuteReader())
                     {
                         while (dr.Read())
@@ -396,13 +396,13 @@ namespace SharpMap.Data.Providers
             return geom;
         }
 
-        protected override void OnExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet fcs, CancellationToken? ct=null)
+        protected override void OnExecuteIntersectionQuery(IGeometry geom, FeatureDataSet ds)
         {
             using (var conn = SpatiaLiteConnection(ConnectionString))
             {
                 string cols = "*";
                 //If using rowid as oid, we need to explicitly request it!
-                if (String.Compare(ObjectIdColumn, "rowid", StringComparison.OrdinalIgnoreCase) == 0)
+                if (string.Compare(ObjectIdColumn, "rowid", true) == 0)
                     cols = "rowid,*";
 
                 string strSql = "SELECT " + cols + ", AsBinary(" + GeometryColumn + ") AS sharpmap_tempgeometry ";
@@ -435,19 +435,19 @@ namespace SharpMap.Data.Providers
                                 fdr.Geometry = GeometryFromWKB.Parse((byte[]) dr["sharpmap_tempgeometry"], Factory);
                             fdt.AddRow(fdr);
                         }
-                        fcs.Add(fdt);
+                        ds.Tables.Add(fdt);
                     }
                 }
             }
         }
 
-        public override void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet fcs, CancellationToken? ct= null)
+        public override void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
         {
             using (var conn = SpatiaLiteConnection(ConnectionString))
             {
                 string cols = "*";
                 //If using rowid as oid, we need to explicitly request it!
-                if (String.Compare(ObjectIdColumn, "rowid", StringComparison.OrdinalIgnoreCase) == 0)
+                if (string.Compare(ObjectIdColumn, "rowid", true) == 0)
                     cols = "rowid,*";
 
                 var strSql = "SELECT " + cols + ", AsBinary(" + GeometryColumn + ") AS sharpmap_tempgeometry ";
@@ -480,7 +480,7 @@ namespace SharpMap.Data.Providers
                                 fdr.Geometry = GeometryFromWKB.Parse((byte[]) dr["sharpmap_tempgeometry"], Factory);
                             fdt.AddRow(fdr);
                         }
-                        fcs.Add(fdt);
+                        ds.Tables.Add(fdt);
                     }
                 }
             }
@@ -512,20 +512,19 @@ namespace SharpMap.Data.Providers
             return count;
         }
 
-        public override IFeature GetFeatureByOid(object rowId)
+        public override FeatureDataRow GetFeature(uint rowId)
         {
             using (SQLiteConnection conn = SpatiaLiteConnection(ConnectionString))
             {
                 string cols = "*";
                 //If using rowid as oid, we need to explicitly request it!
-                if (String.Compare(ObjectIdColumn, "rowid", StringComparison.OrdinalIgnoreCase) == 0)
+                if (string.Compare(ObjectIdColumn, "rowid", true) == 0)
                     cols = "rowid,*";
 
                 string strSQL = "SELECT " +cols + ", AsBinary(" + GeometryColumn + ") AS sharpmap_tempgeometry FROM " + Table +
-                                " WHERE " + ObjectIdColumn + "=:POid";
+                                " WHERE " + ObjectIdColumn + "='" + rowId + "'";
                 using (SQLiteDataAdapter adapter = new SQLiteDataAdapter(strSQL, conn))
                 {
-                    adapter.SelectCommand.Parameters.Add(new SQLiteParameter("POid", rowId));
                     DataSet ds = new DataSet();
                     adapter.Fill(ds);
                     conn.Close();

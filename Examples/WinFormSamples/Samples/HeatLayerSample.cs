@@ -1,4 +1,6 @@
-﻿namespace WinFormSamples.Samples
+﻿using BruTile.Predefined;
+
+namespace WinFormSamples.Samples
 {
     public class HeatLayerSample
     {
@@ -7,32 +9,23 @@
             var fdt = GetRealFeatureDataTable();
             FillRealDataTable(fdt);
 
-            var p = new SharpMap.Data.Providers.FeatureProvider(fdt);
+            var p = new SharpMap.Data.Providers.GeometryFeatureProvider(fdt);
 
 
             var m = new SharpMap.Map();
-            m.BackgroundLayer.Add(new SharpMap.Layers.TileAsyncLayer(
-                new BruTile.Web.OsmTileSource(
-                                  new BruTile.Web.OsmRequest(BruTile.Web.KnownTileServers.Mapnik),
-                                  new BruTile.Cache.FileCache(@"d:\temp\OSM", "png")), "OSM"));
-            m.BackgroundLayer[0].LayerName = "TileLayer with HeatLayer";
+            var tl = new SharpMap.Layers.TileAsyncLayer(KnownTileSources.Create(KnownTileSource.OpenStreetMap),
+                "TileLayer with HeatLayer", System.Drawing.Color.Transparent, false,
+                new BruTile.Cache.FileCache(@"d:\temp\OSM", "png"), System.Drawing.Imaging.ImageFormat.Png);
+            m.BackgroundLayer.Add(tl);
 
             //var l = new SharpMap.Layers.HeatLayer(p, r => 0.02f) { LayerName = "HEAT" };
             var l = new SharpMap.Layers.HeatLayer(p, "Data", 0.00025f) { LayerName = "HEAT" };
             m.Layers.Add(l);
 
-#if DotSpatialProjections
-            l.CoordinateTransformation = new DotSpatial.Projections.CoordinateTransformation
-            {
-                Source = DotSpatial.Projections.ProjectionInfo.FromEpsgCode(4326),
-                Target = DotSpatial.Projections.ProjectionInfo.FromEpsgCode(3857)
-            };
-#else
             var ctfac = new ProjNet.CoordinateSystems.Transformations.CoordinateTransformationFactory();
             l.CoordinateTransformation =
                 ctfac.CreateFromCoordinateSystems(ProjNet.CoordinateSystems.GeographicCoordinateSystem.WGS84,
                                                   ProjNet.CoordinateSystems.ProjectedCoordinateSystem.WebMercator);
-#endif
 
             l.ZoomMin = 0;// 0.01 * m.GetExtents().Width;
             l.ZoomMax = /*0.9 * */m.GetExtents().Width;

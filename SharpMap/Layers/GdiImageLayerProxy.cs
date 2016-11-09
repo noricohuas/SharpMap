@@ -19,9 +19,9 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using Common.Logging;
-using GeoAPI.Features;
 using GeoAPI.Geometries;
 using SharpMap.Data;
+using SharpMap.Styles;
 
 namespace SharpMap.Layers
 {
@@ -57,7 +57,7 @@ namespace SharpMap.Layers
             return new GdiImageLayerProxy<T>(baseLayer, colorMatrix);
         }
 
-        private static readonly ILog Logger = LogManager.GetCurrentClassLogger();
+        private static readonly ILog Logger = LogManager.GetLogger(typeof(GdiImageLayerProxy<T>));
 
         private readonly ColorMatrix _colorMatrix;
         private readonly ColorMap[] _colorMap;
@@ -86,6 +86,7 @@ namespace SharpMap.Layers
             }
             _baseLayer = layer;
             _colorMatrix = colorMatrix;
+            VisibilityUnits = VisibilityUnits.ZoomLevel;
         }
 
         /// <summary>
@@ -101,6 +102,7 @@ namespace SharpMap.Layers
             }
             _baseLayer = layer;
             _colorMap = colorMap;
+            VisibilityUnits = VisibilityUnits.ZoomLevel;
         }
 
         /// <summary>
@@ -119,6 +121,8 @@ namespace SharpMap.Layers
             get { return _baseLayer.MaxVisible; }
             set { _baseLayer.MaxVisible = value; }
         }
+
+        public VisibilityUnits VisibilityUnits { get; set; }
 
         bool ILayer.Enabled
         {
@@ -155,6 +159,11 @@ namespace SharpMap.Layers
         }
 
         void ILayer.Render(Graphics g, Map map)
+        {
+            ((ILayer)this).Render(g, (MapViewport)map);
+        }
+
+        void ILayer.Render(Graphics g, MapViewport map)
         {
             if (_baseLayer is ITileAsyncLayer)
             {
@@ -201,7 +210,7 @@ namespace SharpMap.Layers
             }
         }
 
-        void ICanQueryLayer.ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet ds)
+        void ICanQueryLayer.ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
         {
             if (_baseLayer is ICanQueryLayer)
             {
@@ -209,7 +218,7 @@ namespace SharpMap.Layers
             }
         }
 
-        void ICanQueryLayer.ExecuteIntersectionQuery(IGeometry geometry, IFeatureCollectionSet ds)
+        void ICanQueryLayer.ExecuteIntersectionQuery(IGeometry geometry, FeatureDataSet ds)
         {
             if (_baseLayer is ICanQueryLayer)
             {

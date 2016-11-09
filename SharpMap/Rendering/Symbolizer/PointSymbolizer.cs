@@ -86,13 +86,13 @@ namespace SharpMap.Rendering.Symbolizer
         /// <param name="map">The map</param>
         /// <param name="point">The point to symbolize</param>
         /// <param name="g">The graphics object</param>
-        protected void RenderPoint(Map map, Coordinate point, Graphics g)
+        protected void RenderPoint(MapViewport map, Coordinate point, Graphics g)
         {
             if (point == null)
                 return;
 
 
-            PointF pp = Transform.WorldtoMap(point, map);
+            PointF pp = map.WorldToImage(point);
             pp = PointF.Add(pp, GetOffset());
 
             if (Rotation != 0f && !Single.IsNaN(Rotation))
@@ -151,7 +151,7 @@ namespace SharpMap.Rendering.Symbolizer
         /// <param name="map">The map object, mainly needed for transformation purposes.</param>
         /// <param name="geometry">The geometry to symbolize.</param>
         /// <param name="graphics">The graphics object to use.</param>
-        public void Render(Map map, IPuntal geometry, Graphics graphics)
+        public void Render(MapViewport map, IPuntal geometry, Graphics graphics)
         {
             var mp = geometry as IMultiPoint;
             if (mp != null)
