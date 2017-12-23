@@ -12,13 +12,13 @@
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <description>$description$</description>
     <copyright>Copyright 2016</copyright>
-    <tags>Huitian.SharpMap</tags>
+    <tags>Huitian Huitian.SharpMap</tags>
     <dependencies>
       <dependency id="Common.Logging" version="3.3.1.0" />
       <dependency id="Common.Logging.Core" version="3.3.1.0" />
       <dependency id="GeoAPI" version="1.7.4.0" />
       <dependency id="NetTopologySuite" version="1.14.0.0" />
-      <dependency id="PowerCollections" version="1.0.0.0" />
+      <dependency id="Huitian.PowerCollections" version="1.0.0.0" />
     </dependencies>
   </metadata>
 </package>
