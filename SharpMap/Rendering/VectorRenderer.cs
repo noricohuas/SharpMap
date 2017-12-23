@@ -39,7 +39,7 @@ namespace SharpMap.Rendering
 
         static VectorRenderer()
         {
-            SizeOfString = SizeOfString74;
+            SizeOfString = SizeOfStringCeiling;
         }
 
         private static readonly Bitmap Defaultsymbol =
@@ -56,7 +56,7 @@ namespace SharpMap.Rendering
         /// <param name="map">Map reference</param>
         /// <param name="offset">Offset by which line will be moved to right</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawMultiLineString(Graphics g, IMultiLineString lines, Pen pen, Map map, float offset)
+        public static void DrawMultiLineString(Graphics g, IMultiLineString lines, Pen pen, MapViewport map, float offset)
         {
             for(var i = 0; i < lines.NumGeometries; i++)
             {
@@ -124,7 +124,7 @@ namespace SharpMap.Rendering
         /// <param name="pen">Pen style used for rendering</param>
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawLineString(Graphics g, ILineString line, Pen pen, Map map)
+        public static void DrawLineString(Graphics g, ILineString line, Pen pen, MapViewport map)
         {
             DrawLineString(g, line, pen, map, 0);
         }
@@ -136,7 +136,7 @@ namespace SharpMap.Rendering
         /// <param name="pen">Pen style used for rendering</param>
         /// <param name="map">Map reference</param>
         /// <param name="offset">Offset by which line will be moved to right</param>
-        public static void DrawLineString(Graphics g, ILineString line, Pen pen, Map map, float offset)
+        public static void DrawLineString(Graphics g, ILineString line, Pen pen, MapViewport map, float offset)
         {
             var points = line.TransformToImage(map);
             if (points.Length > 1)
@@ -160,7 +160,7 @@ namespace SharpMap.Rendering
         /// <param name="clip">Specifies whether polygon clipping should be applied</param>
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawMultiPolygon(Graphics g, IMultiPolygon pols, Brush brush, Pen pen, bool clip, Map map)
+        public static void DrawMultiPolygon(Graphics g, IMultiPolygon pols, Brush brush, Pen pen, bool clip, MapViewport map)
         {
             for (var i = 0; i < pols.NumGeometries;i++ )
             {
@@ -179,7 +179,7 @@ namespace SharpMap.Rendering
         /// <param name="clip">Specifies whether polygon clipping should be applied</param>
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawPolygon(Graphics g, IPolygon pol, Brush brush, Pen pen, bool clip, Map map)
+        public static void DrawPolygon(Graphics g, IPolygon pol, Brush brush, Pen pen, bool clip, MapViewport map)
         {
             if (pol.ExteriorRing == null)
                 return;
@@ -272,7 +272,7 @@ namespace SharpMap.Rendering
         /// </summary>
         public static SizeOfStringDelegate SizeOfString
         {
-            get { return _sizeOfString ?? (_sizeOfString = SizeOfString74); }
+            get { return _sizeOfString ?? (_sizeOfString = SizeOfStringCeiling); }
             set 
             { 
                 if (value != null )
@@ -299,6 +299,7 @@ namespace SharpMap.Rendering
         /// <param name="text">the text to render</param>
         /// <param name="font">the font to use</param>
         /// <returns>the size</returns>
+        [Obsolete]
         public static SizeF SizeOfString74(Graphics g, string text, Font font)
         {
             var s = g.MeasureString(text, font);
@@ -335,7 +336,7 @@ namespace SharpMap.Rendering
         /// <param name="rotationPoint">Point where the rotation should take place</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
         public static void DrawLabel(Graphics g, PointF labelPoint, PointF offset, Font font, Color forecolor,
-                                     Brush backcolor, Pen halo, float rotation, string text, Map map,
+                                     Brush backcolor, Pen halo, float rotation, string text, MapViewport map,
                                      LabelStyle.HorizontalAlignmentEnum alignment = LabelStyle.HorizontalAlignmentEnum.Left,
                                      PointF? rotationPoint = null)
 
@@ -567,12 +568,12 @@ namespace SharpMap.Rendering
         /// <param name="offset">Symbol offset af scale=1</param>
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawPoint(Graphics g, IPoint point, Brush b, float size, PointF offset, Map map)
+        public static void DrawPoint(Graphics g, IPoint point, Brush b, float size, PointF offset, MapViewport map)
         {
             if (point == null)
                 return;
 
-            var pp = Transform.WorldtoMap(point.Coordinate, map);
+            var pp = map.WorldToImage(point.Coordinate);
             //var startingTransform = g.Transform;
 
             var width = size;
@@ -590,7 +591,7 @@ namespace SharpMap.Rendering
         /// <param name="symbolizer">Symbolizer to decorate point</param>
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawPoint(IPointSymbolizer symbolizer, Graphics g, IPoint point, Map map)
+        public static void DrawPoint(IPointSymbolizer symbolizer, Graphics g, IPoint point, MapViewport map)
         {
             if (point == null)
                 return; 
@@ -610,7 +611,7 @@ namespace SharpMap.Rendering
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
         public static void DrawPoint(Graphics g, IPoint point, Image symbol, float symbolscale, PointF offset,
-                                     float rotation, Map map)
+                                     float rotation, MapViewport map)
         {
             if (point == null)
                 return;
@@ -619,7 +620,7 @@ namespace SharpMap.Rendering
                 symbol = Defaultsymbol;
 
 
-            var pp = Transform.WorldtoMap(point.Coordinate, map);
+            var pp = map.WorldToImage(point.Coordinate);
 
             lock (symbol)
             {
@@ -684,7 +685,7 @@ namespace SharpMap.Rendering
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
         public static void DrawMultiPoint(Graphics g, IMultiPoint points, Image symbol, float symbolscale, PointF offset,
-                                          float rotation, Map map)
+                                          float rotation, MapViewport map)
         {
             for (var i = 0; i < points.NumGeometries; i++)
             {
@@ -701,7 +702,7 @@ namespace SharpMap.Rendering
         /// <param name="symbolizer">Symbolizer to decorate point</param>
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawMultiPoint(IPointSymbolizer symbolizer, Graphics g, IMultiPoint points, Map map)
+        public static void DrawMultiPoint(IPointSymbolizer symbolizer, Graphics g, IMultiPoint points, MapViewport map)
         {
             symbolizer.Render(map, points, g);
         }
@@ -716,7 +717,7 @@ namespace SharpMap.Rendering
         /// <param name="offset">Symbol offset af scale=1</param>
         /// <param name="map">Map reference</param>
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public static void DrawMultiPoint(Graphics g, IMultiPoint points, Brush brush, float size, PointF offset, Map map)
+        public static void DrawMultiPoint(Graphics g, IMultiPoint points, Brush brush, float size, PointF offset, MapViewport map)
         {
             for (var i = 0; i < points.NumGeometries; i++)
             {

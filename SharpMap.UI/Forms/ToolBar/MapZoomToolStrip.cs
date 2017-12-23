@@ -2,8 +2,10 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
+using System.Security.AccessControl;
 using System.Windows.Forms;
 using GeoAPI.Geometries;
+using SharpMap.Properties;
 
 namespace SharpMap.Forms.ToolBar
 {
@@ -18,19 +20,28 @@ namespace SharpMap.Forms.ToolBar
         System.Windows.Forms.ToolStripButton _zoomPrev;
         System.Windows.Forms.ToolStripButton _zoomNext;
         System.Windows.Forms.ToolStripComboBox _predefinedScales;
+        System.Windows.Forms.ToolStripButton _minZoom;
+        System.Windows.Forms.ToolStripButton _maxZoom;
+        System.Windows.Forms.ToolStripButton _maxZoom2;
+        System.Windows.Forms.ToolStripButton _lock;
         private System.Windows.Forms.ToolStripSeparator _sep1;
         private System.Windows.Forms.ToolStripSeparator _sep2;
         private System.Windows.Forms.ToolStripSeparator _sep3;
+        private System.Windows.Forms.ToolStripSeparator _sep4;
 
-
+        /// <summary>
+        /// Creates an instance of this class
+        /// </summary>
         public MapZoomToolStrip()
-            :base()
         {
             InitializeComponent();
 
             AddScales();
         }
 
+        /// <summary>
+        /// Creates an instance of this class
+        /// </summary>
         public MapZoomToolStrip(IContainer container)
             :base(container)
         {
@@ -61,6 +72,11 @@ namespace SharpMap.Forms.ToolBar
             this._zoomNext = new System.Windows.Forms.ToolStripButton();
             this._sep3 = new System.Windows.Forms.ToolStripSeparator();
             this._predefinedScales = new System.Windows.Forms.ToolStripComboBox();
+            this._sep4 = new System.Windows.Forms.ToolStripSeparator();
+            this._minZoom = new System.Windows.Forms.ToolStripButton();
+            this._maxZoom = new System.Windows.Forms.ToolStripButton();
+            this._maxZoom2 = new System.Windows.Forms.ToolStripButton();
+            this._lock = new System.Windows.Forms.ToolStripButton();
             this.SuspendLayout();
             // 
             // _zoomToExtents
@@ -70,7 +86,7 @@ namespace SharpMap.Forms.ToolBar
             this._zoomToExtents.Name = "_zoomToExtents";
             this._zoomToExtents.Size = new System.Drawing.Size(23, 22);
             this._zoomToExtents.ToolTipText = "Zoom to the map\'s extent";
-            this._zoomToExtents.Click += OnFixedZoom;
+            this._zoomToExtents.Click += this.OnFixedZoom;
             // 
             // _fixedZoomIn
             // 
@@ -79,7 +95,7 @@ namespace SharpMap.Forms.ToolBar
             this._fixedZoomIn.Name = "_fixedZoomIn";
             this._fixedZoomIn.Size = new System.Drawing.Size(23, 22);
             this._fixedZoomIn.ToolTipText = "Zoom into map";
-            this._fixedZoomIn.Click += OnFixedZoom;
+            this._fixedZoomIn.Click += this.OnFixedZoom;
             // 
             // _fixedZoomOut
             // 
@@ -88,9 +104,9 @@ namespace SharpMap.Forms.ToolBar
             this._fixedZoomOut.Name = "_fixedZoomOut";
             this._fixedZoomOut.Size = new System.Drawing.Size(23, 22);
             this._fixedZoomOut.ToolTipText = "Zoom out of map";
-            this._fixedZoomOut.Click += OnFixedZoom;
+            this._fixedZoomOut.Click += this.OnFixedZoom;
             // 
-            // sep1
+            // _sep1
             // 
             this._sep1.Name = "_sep1";
             this._sep1.Size = new System.Drawing.Size(6, 6);
@@ -103,6 +119,7 @@ namespace SharpMap.Forms.ToolBar
             this._zoomToWindow.Name = "_zoomToWindow";
             this._zoomToWindow.Size = new System.Drawing.Size(23, 20);
             this._zoomToWindow.ToolTipText = "Specify viewport by mouse selection";
+            this._zoomToWindow.CheckOnClick = true;
             this._zoomToWindow.CheckedChanged += OnCheckedChanged;
             // 
             // _pan
@@ -113,6 +130,7 @@ namespace SharpMap.Forms.ToolBar
             this._pan.Name = "_pan";
             this._pan.Size = new System.Drawing.Size(23, 20);
             this._pan.ToolTipText = "Drag the map\'s content around and scoll by mouse wheel";
+            this._pan.CheckOnClick = true;
             this._pan.CheckedChanged += OnCheckedChanged;
             // 
             // _sep2
@@ -125,20 +143,20 @@ namespace SharpMap.Forms.ToolBar
             this._zoomPrev.Enabled = false;
             this._zoomPrev.Image = global::SharpMap.Properties.Resources.zoom_last;
             this._zoomPrev.Name = "_zoomPrev";
-            this._zoomPrev.Size = new System.Drawing.Size(23, 22);
+            this._zoomPrev.Size = new System.Drawing.Size(23, 20);
             this._zoomPrev.ToolTipText = "Zoom to previous viewport";
-            this._zoomPrev.Click += OnFixedZoom;
+            this._zoomPrev.Click += (sender, args) => _zoomExtentStack.ZoomPrevious();
             // 
             // _zoomNext
             // 
             this._zoomNext.Enabled = false;
             this._zoomNext.Image = global::SharpMap.Properties.Resources.zoom_next;
             this._zoomNext.Name = "_zoomNext";
-            this._zoomNext.Size = new System.Drawing.Size(23, 22);
+            this._zoomNext.Size = new System.Drawing.Size(23, 20);
             this._zoomNext.ToolTipText = "Restore last viewport";
-            this._zoomNext.Click += OnFixedZoom;
+            this._zoomNext.Click += (sender, args) => _zoomExtentStack.ZoomNext();
             // 
-            // sep3
+            // _sep3
             // 
             this._sep3.Name = "_sep3";
             this._sep3.Size = new System.Drawing.Size(6, 6);
@@ -146,9 +164,53 @@ namespace SharpMap.Forms.ToolBar
             // _predefinedScales
             // 
             this._predefinedScales.Name = "_predefinedScales";
-            this._predefinedScales.Size = new System.Drawing.Size(121, 21);
-            this._predefinedScales.KeyPress += OnScaleEntered;
+            this._predefinedScales.Size = new System.Drawing.Size(121, 23);
             this._predefinedScales.SelectedIndexChanged += OnScaleSelected;
+            // 
+            // _sep4
+            // 
+            this._sep4.Name = "_sep3";
+            this._sep4.Size = new System.Drawing.Size(6, 6);
+            // 
+            // _minZoom
+            // 
+            this._minZoom.Enabled = false;
+            this._minZoom.Text = "min";
+            this._minZoom.Name = "_minZoom";
+            this._minZoom.Size = new System.Drawing.Size(23, 20);
+            this._minZoom.ToolTipText = "Set the minimum zoom level";
+            this._minZoom.CheckOnClick = true;
+            this._minZoom.CheckedChanged += OnCheckedChanged;
+            // 
+            // _maxZoom
+            // 
+            this._maxZoom.Enabled = false;
+            this._maxZoom.Text = "max";
+            this._maxZoom.Name = "_maxZoom";
+            this._maxZoom.Size = new System.Drawing.Size(23, 20);
+            this._maxZoom.ToolTipText = "Set the maximum zoom level";
+            this._maxZoom.CheckOnClick = true;
+            this._maxZoom.CheckedChanged += OnCheckedChanged;
+            // 
+            // _maxZoom2
+            // 
+            this._maxZoom2.Enabled = false;
+            this._maxZoom2.Text = "max box";
+            this._maxZoom2.Name = "_maxZoom2";
+            this._maxZoom2.Size = new System.Drawing.Size(23, 20);
+            this._maxZoom2.ToolTipText = "Set the maximum zoom window";
+            this._maxZoom2.CheckOnClick = true;
+            this._maxZoom2.CheckedChanged += OnCheckedChanged;
+            // 
+            // _lock
+            // 
+            this._lock.Enabled = false;
+            this._lock.Name = "_lock";
+            this._lock.Size = new System.Drawing.Size(23, 20);
+            this._lock.ToolTipText = "Lock the viewport";
+            this._lock.CheckOnClick = true;
+            this._lock.Image = global::SharpMap.Properties.Resources.unlocked;
+            this._lock.CheckedChanged += OnCheckedChanged;
             // 
             // MapZoomToolStrip
             // 
@@ -163,8 +225,12 @@ namespace SharpMap.Forms.ToolBar
             this._zoomPrev,
             this._zoomNext,
             this._sep3,
-            this._predefinedScales});
-            this.Name = "MapZoomToolStrip";
+            this._predefinedScales,
+            this._sep4,
+            this._minZoom,
+            this._maxZoom,
+            this._lock,
+            });
             this.Text = "MapZoomToolStrip";
             this.ResumeLayout(false);
 
@@ -206,9 +272,20 @@ namespace SharpMap.Forms.ToolBar
             private readonly MapBox _mapBox;
             private readonly List<Envelope> _zoomExtentStack = new List<Envelope>();
             private bool _blockStoringWhenPanning;
+
+            /// <summary>
+            /// Value indicating if zoom changes that have been invoked by user interaction should be saved or not
+            /// </summary>
+
             private bool _storeExtentsUser;
+            /// <summary>
+            /// Value indicating if zoom changes that have been invoked by this class should be stored or not
+            /// </summary>
             private bool _storeExtentsInternal;
+
             private int _index;
+            private bool _isPanning;
+            private int _skip = 0;
 
             /// <summary>
             /// Initialisation; no extents will be stored until .StoreExtents = true
@@ -220,22 +297,54 @@ namespace SharpMap.Forms.ToolBar
                 _mapBox.Map.MapViewOnChange += HandleMapMapViewOnChange;
                 _mapBox.MouseDown += HandleMapBoxMouseDown;
                 _mapBox.MouseUp += HandleMapBoxMouseUp;
+                _mapBox.MouseWheel += HandleMouseWheel;
+            }
+
+            private void HandleMouseWheel(object sender, MouseEventArgs e)
+            {
+                // Is the map box going to keep the position under the cursor
+                // untouched?
+                if (_mapBox.ZoomToPointer)
+                {
+                    /* 
+                     * For the computation of the new zoom and center, the
+                     * Map.Center is moved, Map.Zoom is changed and Map.Center 
+                     * then reset. We only want the last viewport, this we're
+                     * going to skip the next two zoom changes.
+                     */
+                    _skip = 2;
+                }
             }
 
             private void HandleMapBoxMouseDown(Coordinate worldPos, MouseEventArgs imagePos)
             {
-                if (_mapBox.ActiveTool == MapBox.Tools.Pan) _blockStoringWhenPanning = false;
+                if (_mapBox.ActiveTool == MapBox.Tools.Pan)
+                {
+                    //_blockStoringWhenPanning = false;
+                    _isPanning = true;
+                    Add(_mapBox.Map.Envelope);
+                }
             }
 
             private void HandleMapBoxMouseUp(Coordinate worldPos, MouseEventArgs imagePos)
             {
-                if (_mapBox.ActiveTool == MapBox.Tools.Pan) _blockStoringWhenPanning = true;
+                if (_mapBox.ActiveTool == MapBox.Tools.Pan)
+                {
+                    //_blockStoringWhenPanning = true;
+                    _isPanning = false;
+                }
             }
 
             private void HandleMapMapViewOnChange()
             {
-                if (_storeExtentsUser && _storeExtentsInternal && !_blockStoringWhenPanning)
-                    Add(_mapBox.Map.Envelope);
+
+                if (_storeExtentsUser && _storeExtentsInternal /*&& (!_blockStoringWhenPanning)*/)
+                {
+                    if (_isPanning)
+                        _zoomExtentStack[_index] = _mapBox.Map.Envelope;
+                    else
+                        Add(_mapBox.Map.Envelope);
+                }
                 else
                     _storeExtentsInternal = true;
             }
@@ -289,6 +398,7 @@ namespace SharpMap.Forms.ToolBar
                     _storeExtentsInternal = false;
                     _index--;
                     _mapBox.Map.ZoomToBox(_zoomExtentStack[_index]);
+                    _mapBox.Refresh();
                 }
             }
 
@@ -302,6 +412,7 @@ namespace SharpMap.Forms.ToolBar
                     _storeExtentsInternal = false;
                     _index++;
                     _mapBox.Map.ZoomToBox(_zoomExtentStack[_index]);
+                    _mapBox.Refresh();
                 }
             }
 
@@ -317,7 +428,10 @@ namespace SharpMap.Forms.ToolBar
                 // add given extent
                 _zoomExtentStack.Add(newExtent);
                 // correct index
-                _index = _zoomExtentStack.Count - 1;
+                if (_skip == 0)
+                    _index = _zoomExtentStack.Count - 1;
+                else 
+                    _skip--;
             }
         }
         
@@ -331,12 +445,47 @@ namespace SharpMap.Forms.ToolBar
 
             if (tsb == _pan)
                 TrySetActiveTool(tsb, MapBox.Tools.Pan);
+            
             if (tsb == _zoomToWindow)
                 TrySetActiveTool(tsb, MapBox.Tools.ZoomWindow);
+            
+            if (tsb == _minZoom)
+            {
+                MapControl.Map.MinimumZoom = _minZoom.Checked
+                    ? MapControl.Map.MinimumZoom = MapControl.Map.Zoom
+                    : MapControl.Map.MinimumZoom = Double.Epsilon;
+            }
+            
+            if (tsb == _maxZoom)
+            {
+                MapControl.Map.MaximumZoom = _maxZoom.Checked
+                    ? MapControl.Map.MaximumZoom = MapControl.Map.Zoom
+                    : MapControl.Map.MaximumZoom = Double.MaxValue;
+            }
+
+            if (tsb == _lock)
+            {
+                if (_lock.Checked)
+                {
+                    mvpLock.Lock();
+                    tsb.Image = global::SharpMap.Properties.Resources.locked;
+                }
+                else
+                {
+                    mvpLock.Unlock();
+                    tsb.Image = global::SharpMap.Properties.Resources.unlocked;
+                }
+
+            }
         }
+
+        private MapViewportLock mvpLock;
 
         protected override void OnMapControlChangedInternal(EventArgs e)
         {
+            if (MapControl == null)
+                return;
+
             //MapControl.MapZoomChanged += OnMapZoomChanged;
             MapControl.MapChanging += HandleMapChanging;
             MapControl.MapChanged += HandleMapChanged;
@@ -348,13 +497,26 @@ namespace SharpMap.Forms.ToolBar
                 _fixedZoomOut.Enabled =
                     _zoomToExtents.Enabled =
                         _pan.Enabled =
-                        _zoomToWindow.Enabled = 
-                            /*_predefinedScales.Enabled =*/
-                                MapControl != null;
-            this.Visible = true;
+                            _zoomToWindow.Enabled =
+                                _minZoom.Enabled =
+                                    _maxZoom.Enabled =
+                                        _maxZoom2.Enabled =
+                                            _lock.Enabled =
+                                                /*_predefinedScales.Enabled =*/
+                                                MapControl.Map != null;
+
+            if (MapControl.Map != null)
+            {
+                _minZoom.Checked = MapControl.Map.MinimumZoom > Double.Epsilon;
+                _maxZoom.Checked = MapControl.Map.MaximumZoom < Double.MaxValue;
+                _maxZoom2.Checked = MapControl.Map.MaximumExtents != null;
+            }
+
+            Visible = true;
             _zoomExtentStack = new ZoomExtentStack(MapControl);
             _zoomExtentStack.StoreExtents = true;
-            
+
+            mvpLock = new MapViewportLock(MapControl.Map);
 
             MapControl.Visible = true;
         }
@@ -370,6 +532,7 @@ namespace SharpMap.Forms.ToolBar
             _predefinedScales.Text = string.Format(NumberFormatInfo.CurrentInfo, "1:{0}", 
                 Math.Round(MapControl.Map.GetMapScale(_dpiX), 0, MidpointRounding.AwayFromZero));
             MapControl.Map.MapViewOnChange += OnMapMapViewOnChange;
+            mvpLock = new MapViewportLock(MapControl.Map);
         }
 
         private void HandleMapChanging(object sender, CancelEventArgs e)
@@ -379,6 +542,8 @@ namespace SharpMap.Forms.ToolBar
             _zoomExtentStack.Clear();
             
             MapControl.Map.MapViewOnChange -= OnMapMapViewOnChange;
+            mvpLock = null;
+
         }
 
         void OnMapMapViewOnChange()
@@ -438,6 +603,13 @@ namespace SharpMap.Forms.ToolBar
         {
             if (e.KeyChar == (char)13)
                 OnScaleSelected(sender, e);
+        }
+
+        protected override void OnPreviewKeyDown(PreviewKeyDownEventArgs e)
+        {
+            base.OnPreviewKeyDown(e);
+            if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Return)
+                e.IsInputKey = true;
         }
 
         private void OnScaleSelected(object sender, EventArgs e)

@@ -1,8 +1,7 @@
 using System;
-using System.Collections.Generic;
-using System.Threading;
+using System.Collections.ObjectModel;
+using System.Data;
 using GeoAPI;
-using GeoAPI.Features;
 using GeoAPI.Geometries;
 using SharpMap.Base;
 
@@ -111,36 +110,33 @@ namespace SharpMap.Data.Providers
         /// Gets the features within the specified <see cref="GeoAPI.Geometries.Envelope"/>
         /// </summary>
         /// <param name="bbox"></param>
-        /// <param name="cancellationToken"></param>
         /// <returns>Features within the specified <see cref="GeoAPI.Geometries.Envelope"/></returns>
-        public abstract IEnumerable<IGeometry> GetGeometriesInView(Envelope bbox, CancellationToken? cancellationToken = null);
+        public abstract Collection<IGeometry> GetGeometriesInView(Envelope bbox);
 
         /// <summary>
-        /// Returns all objects ids of features whose <see cref="GeoAPI.Geometries.Envelope"/> intersects 'bbox'.
+        /// Returns all objects whose <see cref="GeoAPI.Geometries.Envelope"/> intersects 'bbox'.
         /// </summary>
         /// <remarks>
         /// This method is usually much faster than the QueryFeatures method, because intersection tests
         /// are performed on objects simplified by their <see cref="GeoAPI.Geometries.Envelope"/>, and using the Spatial Index
         /// </remarks>
-        /// <param name="cancellationToken">A cancellation token</param>
         /// <param name="bbox">Box that objects should intersect</param>
         /// <returns></returns>
-        public abstract IEnumerable<object> GetOidsInView(Envelope bbox, CancellationToken? cancellationToken = null);
+        public abstract Collection<uint> GetObjectIDsInView(Envelope bbox);
 
         /// <summary>
         /// Returns the geometry corresponding to the Object ID
         /// </summary>
-        /// <param name="oid">The object id</param>
-        /// <returns>A geometry</returns>
-        public abstract IGeometry GetGeometryByOid(object oid);
+        /// <param name="oid">Object ID</param>
+        /// <returns>geometry</returns>
+        public abstract IGeometry GetGeometryByID(uint oid);
 
         /// <summary>
         /// Returns the data associated with all the geometries that are intersected by 'geom'
         /// </summary>
         /// <param name="geom">Geometry to intersect with</param>
-        /// <param name="cancellationToken">A cancellation token</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null)
+        public void ExecuteIntersectionQuery(IGeometry geom, FeatureDataSet ds)
         {
             OnBeginExecuteIntersectionQuery(geom);
             OnExecuteIntersectionQuery(geom, ds);
@@ -151,8 +147,7 @@ namespace SharpMap.Data.Providers
         /// Method to perform preparatory things for executing an intersection query against the data source
         /// </summary>
         /// <param name="geom">The geometry to use as filter.</param>
-        /// <param name="cancellationToken">A cancellation token</param>
-        protected virtual void OnBeginExecuteIntersectionQuery(IGeometry geom, CancellationToken? cancellationToken = null)
+        protected virtual void OnBeginExecuteIntersectionQuery(IGeometry geom)
         {
         }
 
@@ -161,8 +156,7 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="geom">The geometry to use as filter</param>
         /// <param name="ds">The feature data set to store the results in</param>
-        /// <param name="cancellationToken">A cancellation token</param>
-        protected abstract void OnExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null);
+        protected abstract void OnExecuteIntersectionQuery(IGeometry geom, FeatureDataSet ds);
 
         /// <summary>
         /// Method to do cleanup work after having performed the intersection query against the data source
@@ -176,8 +170,7 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="box">Geometry to intersect with</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        /// <param name="cancellationToken">A cancellation token</param>
-        public abstract void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet ds, CancellationToken? cancellationToken = null);
+        public abstract void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds);
 
         /// <summary>
         /// Function to return the total number of features in the dataset
@@ -186,11 +179,11 @@ namespace SharpMap.Data.Providers
         public abstract int GetFeatureCount();
 
         /// <summary>
-        /// Function to return a <see cref="SharpMap.Data.FeatureDataRow"/> based on <paramref name="oid">RowID</paramref>
+        /// Function to return a <see cref="SharpMap.Data.FeatureDataRow"/> based on <paramref name="rowId">RowID</paramref>
         /// </summary>
-        /// <param name="oid">The unique identifier of the row</param>
-        /// <returns>A feature</returns>
-        public abstract IFeature GetFeatureByOid(object oid);
+        /// <param name="rowId">The unique identifier of the row</param>
+        /// <returns>datarow</returns>
+        public abstract FeatureDataRow GetFeature(uint rowId);
 
         /// <summary>
         /// Function to return the <see cref="Envelope"/> of dataset
@@ -214,8 +207,6 @@ namespace SharpMap.Data.Providers
             _isOpen = false;
         }
 
-
-
         #endregion
 
         /// <summary>
@@ -223,30 +214,28 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="baseTable">The feature data table</param>
         /// <returns>An empty feature data table, having the same schema as <paramref name="baseTable"/></returns>
-        [Obsolete("Use IFeatureCollection.Clone()")]
-        protected static IFeatureCollection CloneTableStructure(IFeatureCollection baseTable)
+        protected static FeatureDataTable CloneTableStructure(FeatureDataTable baseTable)
         {
-            return baseTable.Clone();
-            //var res = new FeatureDataTable(baseTable);
-            //var cols = res.Columns;
-            //foreach (DataColumn column in baseTable.Columns)
-            //{
-            //    cols.Add(new DataColumn(column.ColumnName, column.DataType, column.Expression, column.ColumnMapping)
+            var res = new FeatureDataTable(baseTable);
+            var cols = res.Columns;
+            foreach (DataColumn column in baseTable.Columns)
+            {
+                cols.Add(new DataColumn(column.ColumnName, column.DataType, column.Expression, column.ColumnMapping)
                     
-            //    //{AllowDBNull = column.AllowDBNull, AutoIncrement = column.AutoIncrement, AutoIncrementSeed = column.AutoIncrementSeed,
-            //    //    AutoIncrementStep = column.AutoIncrementStep, Caption = column.Caption});
-            //}
-            ////var constraints = res.Constraints;
-            ////foreach (var constraint in baseTable.Constraints)
-            ////{
-            ////    var uc = constraint as UniqueConstraint;
-            ////    if (uc != null)
-            ////    {
-            ////    }
-            ////}
-            //return res;
-        
-
+                /*{AllowDBNull = column.AllowDBNull, AutoIncrement = column.AutoIncrement, AutoIncrementSeed = column.AutoIncrementSeed,
+                    AutoIncrementStep = column.AutoIncrementStep, Caption = column.Caption}*/);
+            }
+            /*
+            var constraints = res.Constraints;
+            foreach (var constraint in baseTable.Constraints)
+            {
+                var uc = constraint as UniqueConstraint;
+                if (uc != null)
+                {
+                }
+            }
+            */
+            return res;
         }
     }
 }

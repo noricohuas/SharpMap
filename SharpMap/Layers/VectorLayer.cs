@@ -19,17 +19,6 @@ using System;
 using System.Collections.ObjectModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Linq;
-using System.Linq.Expressions;
-using GeoAPI.Features;
-using NetTopologySuite.Features;
-using SharpMap.Features;
-#if !DotSpatialProjections
-using GeoAPI;
-using GeoAPI.CoordinateSystems.Transformations;
-#else
-using DotSpatial.Projections;
-#endif
 using SharpMap.Data;
 using SharpMap.Data.Providers;
 using GeoAPI.Geometries;
@@ -37,6 +26,7 @@ using SharpMap.Rendering;
 using SharpMap.Rendering.Thematics;
 using SharpMap.Styles;
 using System.Collections.Generic;
+using System.Runtime.Remoting.Services;
 using Common.Logging;
 
 namespace SharpMap.Layers
@@ -45,15 +35,16 @@ namespace SharpMap.Layers
     /// Class for vector layer properties
     /// </summary>
     [Serializable]
-    public class VectorLayer : Layer, ICanQueryLayer
+    public class VectorLayer : Layer, ICanQueryLayer, ICloneable
     {
-        static ILog logger = LogManager.GetLogger(typeof(VectorLayer));
+        static readonly ILog _logger = LogManager.GetLogger(typeof(VectorLayer));
 
         private bool _clippingEnabled;
         private bool _isQueryEnabled = true;
-        private IProvider _dataSource;
+        private IBaseProvider _dataSource;
         private SmoothingMode _smoothingMode;
         private ITheme _theme;
+        private Envelope _envelope;
 
         /// <summary>
         /// Initializes a new layer
@@ -71,7 +62,7 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="layername">Name of layer</param>
         /// <param name="dataSource">Data source</param>
-        public VectorLayer(string layername, IProvider dataSource) : this(layername)
+        public VectorLayer(string layername, IBaseProvider dataSource) : this(layername)
         {
             _dataSource = dataSource;
         }
@@ -123,10 +114,14 @@ namespace SharpMap.Layers
         /// <summary>
         /// Gets or sets the datasource
         /// </summary>
-        public IProvider DataSource
+        public IBaseProvider DataSource
         {
             get { return _dataSource; }
-            set { _dataSource = value; }
+            set
+            {
+                _dataSource = value;
+                _envelope = null;
+            }
         }
 
         /// <summary>
@@ -148,6 +143,10 @@ namespace SharpMap.Layers
             {
                 if (DataSource == null)
                     throw (new ApplicationException("DataSource property not set on layer '" + LayerName + "'"));
+                
+                if (_envelope != null && CacheExtent)
+                    return ToTarget(_envelope.Clone());
+
                 Envelope box;
                 lock (_dataSource)
                 {
@@ -157,19 +156,24 @@ namespace SharpMap.Layers
                     box = DataSource.GetExtents();
                     if (!wasOpen) //Restore state
                         DataSource.Close();
+
+                    if (CacheExtent)
+                        _envelope = box;
                 }
-                if (CoordinateTransformation != null)
-#if !DotSpatialProjections
-                {
-                    var boxTrans = GeometryTransform.TransformBox(box, CoordinateTransformation.MathTransform);
-                    return boxTrans;
-                }            
-#else
-                    return GeometryTransform.TransformBox(box, CoordinateTransformation.Source, CoordinateTransformation.Target);
-#endif
-                return box;
+
+                return ToTarget(box);
             }
         }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the layer envelope should be treated as static or not.
+        /// </summary>
+        /// <remarks>
+        /// When CacheExtent is enabled the layer Envelope will be calculated only once from DataSource, this 
+        /// helps to speed up the Envelope calculation with some DataProviders. Default is false for backward
+        /// compatibility.
+        /// </remarks>
+        public virtual bool CacheExtent { get; set; }
 
         /// <summary>
         /// Gets or sets the SRID of this VectorLayer's data source
@@ -201,42 +205,20 @@ namespace SharpMap.Layers
         #endregion
 
         /// <summary>
-        /// Renders the layer to a graphics object
+        /// Renders the layer to a graphics object, using the given map viewport
         /// </summary>
         /// <param name="g">Graphics object reference</param>
         /// <param name="map">Map which is rendered</param>
-        /// 
-        public override void Render(Graphics g, Map map)
+        public override void Render(Graphics g, MapViewport map)
         {
             if (map.Center == null)
                 throw (new ApplicationException("Cannot render map. View center not specified"));
 
             g.SmoothingMode = SmoothingMode;
-            var envelope = map.Envelope; //View to render
-            if (CoordinateTransformation != null)
-            {
-#if !DotSpatialProjections
-                if (ReverseCoordinateTransformation != null)
-                {
-                    envelope = GeometryTransform.TransformBox(envelope, ReverseCoordinateTransformation.MathTransform);
-                }
-                else
-                {
-                    CoordinateTransformation.MathTransform.Invert();
-                    envelope = GeometryTransform.TransformBox(envelope, CoordinateTransformation.MathTransform);
-                    CoordinateTransformation.MathTransform.Invert();
-                }
-#else
-                envelope = GeometryTransform.TransformBox(envelope, CoordinateTransformation.Target, CoordinateTransformation.Source);
-#endif
-            }
+            var envelope = ToSource(map.Envelope); //View to render
 
             if (DataSource == null)
                 throw (new ApplicationException("DataSource property not set on layer '" + LayerName + "'"));
-
-
-
-
 
             //If thematics is enabled, we use a slighty different rendering approach
             if (Theme != null)
@@ -255,38 +237,29 @@ namespace SharpMap.Layers
         /// <param name="map">The map object</param>
         /// <param name="envelope">The envelope to render</param>
         /// <param name="theme">The theme to apply</param>
-        protected void RenderInternal(Graphics g, Map map, Envelope envelope, ITheme theme)
+        protected void RenderInternal(Graphics g, MapViewport map, Envelope envelope, ITheme theme)
         {
-            
-            IFeatureCollectionSet ds;
+            var ds = new FeatureDataSet();
             lock (_dataSource)
             {
-                ds = new FeatureCollectionSet();
                 DataSource.Open();
                 DataSource.ExecuteIntersectionQuery(envelope, ds);
                 DataSource.Close();
             }
 
+            double scale = map.GetMapScale((int)g.DpiX);
+            double zoom = map.Zoom;
 
-
-            foreach (var features in ds)
+            foreach (FeatureDataTable features in ds.Tables)
             {
-
-
+                // Transform geometries if necessary
                 if (CoordinateTransformation != null)
+                {
                     for (int i = 0; i < features.Count; i++)
-#if !DotSpatialProjections
-                        features[i].Geometry = GeometryTransform.TransformGeometry(features[i].Geometry,
-                                                                                    CoordinateTransformation.
-                                                                                        MathTransform,
-                                GeometryServiceProvider.Instance.CreateGeometryFactory((int)CoordinateTransformation.TargetCS.AuthorityCode));
-#else
-                    features[i].Geometry = GeometryTransform.TransformGeometry(features[i].Geometry,
-                                                                                CoordinateTransformation.Source,
-                                                                                CoordinateTransformation.Target,
-                                                                                CoordinateTransformation.TargetFactory);
-
-#endif
+                    {
+                        features[i].Geometry = ToTarget(features[i].Geometry);
+                    }
+                }
 
                 //Linestring outlines is drawn by drawing the layer once with a thicker line
                 //before drawing the "inline" on top.
@@ -298,7 +271,10 @@ namespace SharpMap.Layers
                         var outlineStyle = theme.GetStyle(feature) as VectorStyle;
                         if (outlineStyle == null) continue;
                         if (!(outlineStyle.Enabled && outlineStyle.EnableOutline)) continue;
-                        if (!(outlineStyle.MinVisible <= map.Zoom && map.Zoom <= outlineStyle.MaxVisible)) continue;
+
+                        double compare = outlineStyle.VisibilityUnits == VisibilityUnits.ZoomLevel ? zoom : scale;
+
+                        if (!(outlineStyle.MinVisible <= compare && compare <= outlineStyle.MaxVisible)) continue;
 
                         using (outlineStyle = outlineStyle.Clone())
                         {
@@ -327,10 +303,13 @@ namespace SharpMap.Layers
                     var style = theme.GetStyle(feature);
                     if (style == null) continue;
                     if (!style.Enabled) continue;
-                    if (!(style.MinVisible <= map.Zoom && map.Zoom <= style.MaxVisible)) continue;
+
+                    double compare = style.VisibilityUnits == VisibilityUnits.ZoomLevel ? zoom : scale;
+
+                    if (!(style.MinVisible <= compare && compare <= style.MaxVisible)) continue;
 
 
-                    IStyle[] stylesToRender = GetStylesToRender(style);
+                    IEnumerable<IStyle> stylesToRender = GetStylesToRender(style);
 
                     if (stylesToRender == null)
                         return;
@@ -358,12 +337,12 @@ namespace SharpMap.Layers
         /// <param name="g">The graphics object</param>
         /// <param name="map">The map object</param>
         /// <param name="envelope">The envelope to render</param>
-        protected void RenderInternal(Graphics g, Map map, Envelope envelope)
+        protected void RenderInternal(Graphics g, MapViewport map, Envelope envelope)
         {
             //if style is not enabled, we don't need to render anything
             if (!Style.Enabled) return;
 
-            IStyle[] stylesToRender = GetStylesToRender(Style);
+            IEnumerable<IStyle> stylesToRender = GetStylesToRender(Style);
             
             if (stylesToRender== null)
                 return;
@@ -376,7 +355,7 @@ namespace SharpMap.Layers
                 {
                     if (vStyle != null)
                     {
-                        List<IGeometry> geoms;
+                        Collection<IGeometry> geoms;
                         // Is datasource already open?
                         lock (_dataSource)
                         {
@@ -386,27 +365,26 @@ namespace SharpMap.Layers
                             if (!alreadyOpen) { DataSource.Open(); }
 
                             // Read data
-                            geoms = new List<IGeometry>(DataSource.GetGeometriesInView(envelope));
+                            geoms = DataSource.GetGeometriesInView(envelope);
 
-                            if (logger.IsDebugEnabled)
+                            if (_logger.IsDebugEnabled)
                             {
-                                logger.DebugFormat("Layer {0}, NumGeometries {1}", LayerName, geoms.Count());
+                                _logger.DebugFormat("Layer {0}, NumGeometries {1}", LayerName, geoms.Count);
                             }
 
                             // If was not open, close it
                             if (!alreadyOpen) { DataSource.Close(); }
                         }
+
+                        // Transform geometries if necessary
                         if (CoordinateTransformation != null)
-                            for (int i = 0; i < geoms.Count(); i++)
-#if !DotSpatialProjections
-                                geoms[i] = GeometryTransform.TransformGeometry(geoms[i], CoordinateTransformation.MathTransform,
-                                    GeometryServiceProvider.Instance.CreateGeometryFactory((int)CoordinateTransformation.TargetCS.AuthorityCode));
-#else
-                    geoms[i] = GeometryTransform.TransformGeometry(geoms[i], 
-                        CoordinateTransformation.Source, 
-                        CoordinateTransformation.Target, 
-                        CoordinateTransformation.TargetFactory);
-#endif
+                        {
+                            for (int i = 0; i < geoms.Count; i++)
+                            {
+                                geoms[i] = ToTarget(geoms[i]);
+                            }
+                        }
+
                         if (vStyle.LineSymbolizer != null)
                         {
                             vStyle.LineSymbolizer.Begin(g, map, geoms.Count);
@@ -431,10 +409,10 @@ namespace SharpMap.Layers
                             }
                         }
 
-                        for (int i = 0; i < geoms.Count; i++)
+                        foreach (IGeometry geom in geoms)
                         {
-                            if (geoms[i] != null)
-                                RenderGeometry(g, map, geoms[i], vStyle);
+                            if (geom != null)
+                                RenderGeometry(g, map, geom, vStyle);
                         }
 
                         if (vStyle.LineSymbolizer != null)
@@ -452,14 +430,14 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="style"></param>
         /// <returns></returns>
-        private IStyle[] GetStylesToRender(IStyle style)
+        public static IEnumerable<IStyle> GetStylesToRender(IStyle style)
         {
             IStyle[] stylesToRender = null;
             if (style is GroupStyle)
             {
                 var gs = style as GroupStyle;
-                List<IStyle> styles = new List<IStyle>();
-                for (int i = 0; i < gs.Count; i++)
+                var styles = new List<IStyle>();
+                for (var i = 0; i < gs.Count; i++)
                 {
                     styles.AddRange(GetStylesToRender(gs[i]));
                 }
@@ -467,7 +445,7 @@ namespace SharpMap.Layers
             }
             else if (style is VectorStyle)
             {
-                stylesToRender = new IStyle[] { style };
+                stylesToRender = new[] { style };
             }
 
             return stylesToRender;
@@ -480,7 +458,7 @@ namespace SharpMap.Layers
         /// <param name="map">The map</param>
         /// <param name="feature">The feature's geometry</param>
         /// <param name="style">The style to apply</param>
-        protected void RenderGeometry(Graphics g, Map map, IGeometry feature, VectorStyle style)
+        protected void RenderGeometry(Graphics g, MapViewport map, IGeometry feature, VectorStyle style)
         {
             if (feature == null)
                 return;
@@ -551,7 +529,7 @@ namespace SharpMap.Layers
                     }
                     break;
                 case OgcGeometryType.GeometryCollection:                    
-                    IGeometryCollection coll = (IGeometryCollection)feature;
+                    var coll = (IGeometryCollection)feature;
                     for (var i = 0; i < coll.NumGeometries; i++)
                     {
                         IGeometry geom = coll[i];
@@ -570,36 +548,19 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="box">Geometry to intersect with</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet ds)
+        public void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
         {
-            if (CoordinateTransformation != null)
-            {
-#if !DotSpatialProjections
-                if (ReverseCoordinateTransformation != null)
-                {
-                    box = GeometryTransform.TransformBox(box, ReverseCoordinateTransformation.MathTransform);
-                }
-                else
-                {
-                    CoordinateTransformation.MathTransform.Invert();
-                    box = GeometryTransform.TransformBox(box, CoordinateTransformation.MathTransform);
-                    CoordinateTransformation.MathTransform.Invert();
-                }
-#else
-                box = GeometryTransform.TransformBox(box, CoordinateTransformation.Target, CoordinateTransformation.Source);
-#endif
-            }
+            box = ToSource(box);
 
             lock (_dataSource)
             {
                 _dataSource.Open();
-                int tableCount = ds.Count;
+                int tableCount = ds.Tables.Count;
                 _dataSource.ExecuteIntersectionQuery(box, ds);
-                if (ds.Count > tableCount)
+                if (ds.Tables.Count > tableCount)
                 {
                     //We added a table, name it according to layer
-                    var table = ds[ds.Count - 1];
-                    table.Name = LayerName;
+                    ds.Tables[ds.Tables.Count - 1].TableName = LayerName;
                 }
                 _dataSource.Close();
             }
@@ -610,41 +571,19 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="geometry">Geometry to intersect with</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(IGeometry geometry, IFeatureCollectionSet ds)
+        public void ExecuteIntersectionQuery(IGeometry geometry, FeatureDataSet ds)
         {
-            if (CoordinateTransformation != null)
-            {
-#if !DotSpatialProjections
-                if (ReverseCoordinateTransformation != null)
-                {
-                    geometry = GeometryTransform.TransformGeometry(geometry, ReverseCoordinateTransformation.MathTransform,
-                            GeometryServiceProvider.Instance.CreateGeometryFactory((int)CoordinateTransformation.TargetCS.AuthorityCode));
-                }
-                else
-                {
-                    CoordinateTransformation.MathTransform.Invert();
-                    geometry = GeometryTransform.TransformGeometry(geometry, CoordinateTransformation.MathTransform,
-                            GeometryServiceProvider.Instance.CreateGeometryFactory((int)CoordinateTransformation.SourceCS.AuthorityCode));
-                    CoordinateTransformation.MathTransform.Invert();
-                }
-#else
-                geometry = GeometryTransform.TransformGeometry(geometry, 
-                    CoordinateTransformation.Target,
-                    CoordinateTransformation.Source,
-                    CoordinateTransformation.SourceFactory);
-#endif
-            }
+            geometry = ToSource(geometry);
 
             lock (_dataSource)
             {
                 _dataSource.Open();
-                int tableCount = ds.Count;
+                int tableCount = ds.Tables.Count;
                 _dataSource.ExecuteIntersectionQuery(geometry, ds);
-                if (ds.Count > tableCount)
+                if (ds.Tables.Count > tableCount)
                 {
                     //We added a table, name it according to layer
-                    var table = ds[ds.Count - 1];
-                    table.Name = LayerName;
+                    ds.Tables[ds.Tables.Count - 1].TableName = LayerName;
                 }
                 _dataSource.Close();
             }
@@ -660,5 +599,14 @@ namespace SharpMap.Layers
         }
 
         #endregion
+
+        public object Clone()
+        {
+            var res = (VectorLayer)MemberwiseClone();
+            res.Style = Style.Clone();
+            if (Theme is ICloneable)
+                res.Theme = (ITheme) ((ICloneable) Theme).Clone();
+            return res;
+        }
     }
 }

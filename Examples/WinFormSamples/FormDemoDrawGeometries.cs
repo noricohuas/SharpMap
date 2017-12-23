@@ -11,21 +11,17 @@ using SharpMap.Data;
 using SharpMap.Styles;
 using SharpMap.Rendering.Thematics;
 using BruTile.Web;
+using BruTile.Predefined;
 using SharpMap.Data.Providers;
 
-#if DotSpatialProjections
-using GeometryTransform = DotSpatial.Projections.GeometryTransform;
-using WinFormSamples.Samples;
-#else
 using GeometryTransform = GeoAPI.CoordinateSystems.Transformations.GeometryTransform;
-#endif
 
 namespace WinFormSamples
 {
     public partial class FormDemoDrawGeometries : Form
     {
 
-        private SharpMap.Data.Providers.FeatureProvider geoProvider;
+        private SharpMap.Data.Providers.GeometryProvider geoProvider;
 
         public FormDemoDrawGeometries()
         {
@@ -42,26 +38,19 @@ namespace WinFormSamples
 
             //this.mapBox1.Map = ShapefileSample.InitializeMap(0);
             //Google Background
-            TileAsyncLayer bingLayer = new TileAsyncLayer(new BingTileSource(BingRequest.UrlBing, "", BingMapType.Roads), "TileLayer - Bing");
+            TileAsyncLayer bingLayer = new TileAsyncLayer(KnownTileSources.Create(KnownTileSource.BingRoadsStaging), "TileLayer - Bing");
             this.mapBox1.Map.BackgroundLayer.Add(bingLayer);
 
 
             SharpMap.Layers.VectorLayer vl = new VectorLayer("My Geometries");
-            geoProvider = new SharpMap.Data.Providers.FeatureProvider(new List<IGeometry>());
+            geoProvider = new SharpMap.Data.Providers.GeometryProvider(new List<IGeometry>());
             vl.DataSource = geoProvider;
             this.mapBox1.Map.Layers.Add(vl);
 
-#if DotSpatialProjections
-            var mathTransform = LayerTools.Wgs84toGoogleMercator;
-            var geom = GeometryTransform.TransformBox(
-                new Envelope(-9.205626, -9.123736, 38.690993, 38.740837),
-                mathTransform.Source, mathTransform.Target);
-#else
             var mathTransform = LayerTools.Wgs84toGoogleMercator.MathTransform;
             var geom = GeometryTransform.TransformBox(
                 new Envelope(-9.205626, -9.123736, 38.690993, 38.740837),
                 mathTransform);
-#endif
 
             this.mapBox1.Map.ZoomToExtents(); //(geom);
             this.mapBox1.Refresh();
@@ -87,8 +76,7 @@ namespace WinFormSamples
         {
             MessageBox.Show("Geometry defined!\r\n"+geometry);
 
-            var f = geoProvider.Factory.Create(geometry);
-            geoProvider.Features.Add(f);
+            geoProvider.Geometries.Add(geometry);
 
             this.mapBox1.ActiveTool = SharpMap.Forms.MapBox.Tools.Pan;
             this.mapBox1.Refresh();
@@ -134,7 +122,7 @@ namespace WinFormSamples
 
         private void button1_Click(object sender, EventArgs e)
         {
-            this.geoProvider.Features.Clear();
+            this.geoProvider.Geometries.Clear();
             this.mapBox1.Refresh();
         }
 

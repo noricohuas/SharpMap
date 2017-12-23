@@ -22,15 +22,6 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Globalization;
-using GeoAPI.Features;
-using SharpMap.Features;
-#if !DotSpatialProjections
-using GeoAPI;
-using NetTopologySuite.Geometries;
-using GeoAPI.CoordinateSystems.Transformations;
-#else
-using DotSpatial.Projections;
-#endif
 using SharpMap.Data;
 using SharpMap.Data.Providers;
 using GeoAPI.Geometries;
@@ -70,23 +61,23 @@ namespace SharpMap.Layers
         /// <summary>
         /// Delegate method for creating advanced label texts
         /// </summary>
-        /// <param name="fdr">the <see cref="IFeature"/> to build the label for</param>
+        /// <param name="fdr">the <see cref="FeatureDataRow"/> to build the label for</param>
         /// <returns>the label</returns>
-        public delegate string GetLabelMethod(IFeature fdr);
+        public delegate string GetLabelMethod(FeatureDataRow fdr);
 
         /// <summary>
         /// Delegate method for calculating the priority of label rendering
         /// </summary>
-        /// <param name="fdr">the <see cref="IFeature"/> to compute the priority value from</param>
+        /// <param name="fdr">the <see cref="FeatureDataRow"/> to compute the priority value from</param>
         /// <returns>the priority value</returns>
-        public delegate int GetPriorityMethod(IFeature fdr);
+        public delegate int GetPriorityMethod(FeatureDataRow fdr);
 
         /// <summary>
         /// Delegate method for advanced placement of the label position
         /// </summary>
-        /// <param name="fdr">the <see cref="IFeature"/> to compute the label position from</param>
+        /// <param name="fdr">the <see cref="FeatureDataRow"/> to compute the label position from</param>
         /// <returns>the priority value</returns>
-        public delegate Coordinate GetLocationMethod(IFeature fdr);
+        public delegate Coordinate GetLocationMethod(FeatureDataRow fdr);
         #endregion
 
         #region MultipartGeometryBehaviourEnum enum
@@ -119,10 +110,11 @@ namespace SharpMap.Layers
 
         #endregion
 
-        private IProvider _dataSource;
+        private IBaseProvider _dataSource;
         private GetLabelMethod _getLabelMethod;
         private GetPriorityMethod _getPriorityMethod;
         private GetLocationMethod _getLocationMethod;
+        private Envelope _envelope;
 
         /// <summary>
         /// Name of the column that holds the value for the label.
@@ -204,10 +196,14 @@ namespace SharpMap.Layers
         /// <summary>
         /// Gets or sets the datasource
         /// </summary>
-        public IProvider DataSource
+        public IBaseProvider DataSource
         {
             get { return _dataSource; }
-            set { _dataSource = value; }
+            set
+            {
+                _dataSource = value;
+                _envelope = null;
+            }
         }
 
         /// <summary>
@@ -343,25 +339,35 @@ namespace SharpMap.Layers
         {
             get
             {
+                if (DataSource == null)
+                    throw (new ApplicationException("DataSource property not set on layer '" + LayerName + "'"));
+
+                if (_envelope != null && CacheExtent)
+                    return ToTarget(_envelope.Clone());
+
                 var wasOpen = DataSource.IsOpen;
                 if (!wasOpen)
                     DataSource.Open();
                 var box = DataSource.GetExtents();
                 if (!wasOpen) //Restore state
                     DataSource.Close();
-                if (CoordinateTransformation != null)
-#if !DotSpatialProjections
-                {
-                    var boxTrans = GeometryTransform.TransformBox(box, CoordinateTransformation.MathTransform);
-                    return boxTrans; //.Intersection(CoordinateTransformation.TargetCS.DefaultEnvelope);
 
-                }
-#else
-                    return GeometryTransform.TransformBox(box, CoordinateTransformation.Source, CoordinateTransformation.Target);
-#endif
-                return box;
+                if (CacheExtent)
+                    _envelope = box;
+
+                return ToTarget(box);
             }
         }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the layer envelope should be treated as static or not.
+        /// </summary>
+        /// <remarks>
+        /// When CacheExtent is enabled the layer Envelope will be calculated only once from DataSource, this 
+        /// helps to speed up the Envelope calculation with some DataProviders. Default is false for backward
+        /// compatibility.
+        /// </remarks>
+        public virtual bool CacheExtent { get; set; }
 
         /// <summary>
         /// Gets or sets the SRID of this VectorLayer's data source
@@ -396,226 +402,203 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="g">Graphics object reference</param>
         /// <param name="map">Map which is rendered</param>
-        public override void Render(Graphics g, Map map)
+        public override void Render(Graphics g, MapViewport map)
         {
-            if (Style.Enabled && Style.MaxVisible >= map.Zoom && Style.MinVisible < map.Zoom)
+            if (DataSource == null)
+                throw (new ApplicationException("DataSource property not set on layer '" + LayerName + "'"));
+            g.TextRenderingHint = TextRenderingHint;
+            g.SmoothingMode = SmoothingMode;
+
+            var mapEnvelope = map.Envelope;
+            var layerEnvelope = ToSource(mapEnvelope); //View to render
+            var lineClipping = new CohenSutherlandLineClipping(mapEnvelope.MinX, mapEnvelope.MinY,
+                mapEnvelope.MaxX, mapEnvelope.MaxY);
+
+            var ds = new FeatureDataSet();
+            DataSource.Open();
+            DataSource.ExecuteIntersectionQuery(layerEnvelope, ds);
+            DataSource.Close();
+            if (ds.Tables.Count == 0)
             {
-                
-                if (DataSource == null)
-                    throw (new ApplicationException("DataSource property not set on layer '" + LayerName + "'"));
-                g.TextRenderingHint = TextRenderingHint;
-                g.SmoothingMode = SmoothingMode;
+                base.Render(g, map);
+                return;
+            }
 
-                var envelope = map.Envelope; //View to render
-                var lineClipping = new CohenSutherlandLineClipping(envelope.MinX, envelope.MinY,
-                                                                   envelope.MaxX, envelope.MaxY);
+            var features = ds.Tables[0];
 
-                if (CoordinateTransformation != null)
+            //Initialize label collection
+            var labels = new List<BaseLabel>();
+
+            //List<System.Drawing.Rectangle> LabelBoxes; //Used for collision detection
+            //Render labels
+
+            for (int i = 0; i < features.Count; i++)
+            {
+                var feature = features[i];
+                feature.Geometry = ToTarget(feature.Geometry);
+
+                LabelStyle style;
+                if (Theme != null) //If thematics is enabled, lets override the style
+                    style = Theme.GetStyle(feature) as LabelStyle;
+                else
+                    style = Style;
+
+                // Do we need to render at all?
+                if (!style.Enabled) continue;
+
+                // Rotation
+                float rotationStyle = style != null ? style.Rotation : 0f;
+                float rotationColumn = 0f;
+                if (!String.IsNullOrEmpty(RotationColumn))
+                    Single.TryParse(feature[RotationColumn].ToString(), NumberStyles.Any, Map.NumberFormatEnUs,
+                        out rotationColumn);
+                float rotation = rotationStyle + rotationColumn;
+
+                // Priority
+                int priority = Priority;
+                if (_getPriorityMethod != null)
+                    priority = _getPriorityMethod(feature);
+                else if (!String.IsNullOrEmpty(PriorityColumn))
+                    Int32.TryParse(feature[PriorityColumn].ToString(), NumberStyles.Any, Map.NumberFormatEnUs,
+                        out priority);
+
+                // Text
+                string text;
+                if (_getLabelMethod != null)
+                    text = _getLabelMethod(feature);
+                else
+                    text = feature[LabelColumn].ToString();
+
+                if (!String.IsNullOrEmpty(text))
                 {
-#if !DotSpatialProjections
-                    if (ReverseCoordinateTransformation != null)
+                    // for lineal geometries, try clipping to ensure proper labeling
+                    if (feature.Geometry is ILineal)
                     {
-                        envelope = GeometryTransform.TransformBox(envelope, ReverseCoordinateTransformation.MathTransform);
+                        if (feature.Geometry is ILineString)
+                            feature.Geometry = lineClipping.ClipLineString(feature.Geometry as ILineString);
+                        else if (feature.Geometry is IMultiLineString)
+                            feature.Geometry = lineClipping.ClipLineString(feature.Geometry as IMultiLineString);
                     }
-                    else
+
+                    if (feature.Geometry is IGeometryCollection)
                     {
-                        CoordinateTransformation.MathTransform.Invert();
-                        envelope = GeometryTransform.TransformBox(envelope, CoordinateTransformation.MathTransform);
-                        CoordinateTransformation.MathTransform.Invert();
-                    }
-#else
-                    envelope = GeometryTransform.TransformBox(envelope, CoordinateTransformation.Target, CoordinateTransformation.Source);
-#endif
-                }
-                var ds = new FeatureCollectionSet();
-                DataSource.Open();
-                DataSource.ExecuteIntersectionQuery(envelope, ds);
-                DataSource.Close();
-                if (ds.Count == 0)
-                {
-                    base.Render(g, map);
-                    return;
-                }
-
-                var features = ds[0];
-
-
-                //Initialize label collection
-                List<BaseLabel> labels = new List<BaseLabel>();
-
-                //List<System.Drawing.Rectangle> LabelBoxes; //Used for collision detection
-                //Render labels
-                foreach(var feature in features)
-                {
-                    var featureGeometry = (IGeometry)feature.Geometry.Clone();
-                    if (CoordinateTransformation != null)
-#if !DotSpatialProjections
-                        featureGeometry = GeometryTransform.TransformGeometry(
-                            featureGeometry, CoordinateTransformation.MathTransform,
-                            GeometryServiceProvider.Instance.CreateGeometryFactory((int)CoordinateTransformation.TargetCS.AuthorityCode)
-                            );
-#else
-                        featuresGeometry = GeometryTransform.TransformGeometry(features[i].Geometry,
-                                                                               CoordinateTransformation.Source,
-                                                                               CoordinateTransformation.Target,
-                                                                               CoordinateTransformation.TargetFactory);
-#endif
-                    LabelStyle style;
-                    if (Theme != null) //If thematics is enabled, lets override the style
-                        style = Theme.GetStyle(feature) as LabelStyle;
-                    else
-                        style = Style;
-
-                    float rotationStyle = style != null ? style.Rotation : 0f;
-                    float rotationColumn = 0f;
-                    if (!String.IsNullOrEmpty(RotationColumn))
-                        Single.TryParse(feature.Attributes[RotationColumn].ToString(), NumberStyles.Any, Map.NumberFormatEnUs,
-                                       out rotationColumn);
-                    float rotation = rotationStyle + rotationColumn;
-
-                    int priority = Priority;
-                    if (_getPriorityMethod != null)
-                        priority = _getPriorityMethod(feature);
-                    else if (!String.IsNullOrEmpty(PriorityColumn))
-                        Int32.TryParse(feature.Attributes[PriorityColumn].ToString(), NumberStyles.Any, Map.NumberFormatEnUs,
-                                     out priority);
-
-                    string text;
-                    if (_getLabelMethod != null)
-                        text = _getLabelMethod(feature);
-                    else
-                        text = feature.Attributes[LabelColumn].ToString();
-
-                    if (!String.IsNullOrEmpty(text))
-                    {
-                        // for lineal geometries, try clipping to ensure proper labeling
-                        if (featureGeometry is ILineal)
+                        if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.All)
                         {
-                            if (featureGeometry is ILineString)
-                                featureGeometry = lineClipping.ClipLineString(featureGeometry as ILineString);
-                            else if (featureGeometry is IMultiLineString)
-                                featureGeometry = lineClipping.ClipLineString(featureGeometry as IMultiLineString);
-                        }
-
-                        if (featureGeometry is IGeometryCollection)
-                        {
-                            if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.All)
+                            foreach (var geom in (feature.Geometry as IGeometryCollection))
                             {
-                                foreach (var geom in (featureGeometry as IGeometryCollection))
-                                {
-                                    BaseLabel lbl = CreateLabel(feature, geom, text, rotation, priority, style, map, g, _getLocationMethod);
-                                    if (lbl != null)
-                                        labels.Add(lbl);
-                                }
-                            }
-                            else if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.CommonCenter)
-                            {
-                                BaseLabel lbl = CreateLabel(feature, featureGeometry, text, rotation, priority, style, map, g, _getLocationMethod);
-                                if (lbl != null) labels.Add(lbl);
-                            }
-                            else if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.First)
-                            {
-                                if ((featureGeometry as IGeometryCollection).NumGeometries > 0)
-                                {
-                                    BaseLabel lbl = CreateLabel(feature, (featureGeometry as IGeometryCollection).GetGeometryN(0), text,
-                                                            rotation, style, map, g);
-                                    if (lbl != null)
-                                        labels.Add(lbl);
-                                }
-                            }
-                            else if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.Largest)
-                            {
-                                var coll = (featureGeometry as IGeometryCollection);
-                                if (coll.NumGeometries > 0)
-                                {
-                                    var largestVal = 0d;
-                                    var idxOfLargest = 0;
-                                    for (var j = 0; j < coll.NumGeometries; j++)
-                                    {
-                                        var geom = coll.GetGeometryN(j);
-                                        if (geom is ILineString && ((ILineString) geom).Length > largestVal)
-                                        {
-                                            largestVal = ((ILineString) geom).Length;
-                                            idxOfLargest = j;
-                                        }
-                                        if (geom is IMultiLineString && ((IMultiLineString) geom).Length > largestVal)
-                                        {
-                                            largestVal = ((IMultiLineString)geom).Length;
-                                            idxOfLargest = j;
-                                        }
-                                        if (geom is IPolygon && ((IPolygon) geom).Area > largestVal)
-                                        {
-                                            largestVal = ((IPolygon) geom).Area;
-                                            idxOfLargest = j;
-                                        }
-                                        if (geom is IMultiPolygon && ((IMultiPolygon) geom).Area > largestVal)
-                                        {
-                                            largestVal = ((IMultiPolygon) geom).Area;
-                                            idxOfLargest = j;
-                                        }
-                                    }
-
-                                    BaseLabel lbl = CreateLabel(feature, coll.GetGeometryN(idxOfLargest), text, rotation, priority, style,
-                                                            map, g, _getLocationMethod);
-                                    if (lbl != null)
-                                        labels.Add(lbl);
-                                }
+                                BaseLabel lbl = CreateLabel(feature, geom, text, rotation, priority, style, map, g, _getLocationMethod);
+                                if (lbl != null)
+                                    labels.Add(lbl);
                             }
                         }
-                        else
+                        else if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.CommonCenter)
                         {
-                            BaseLabel lbl = CreateLabel(feature, featureGeometry, text, rotation, priority, style, map, g, _getLocationMethod);
+                            BaseLabel lbl = CreateLabel(feature, feature.Geometry, text, rotation, priority, style, map, g, _getLocationMethod);
                             if (lbl != null)
                                 labels.Add(lbl);
                         }
-                    }
-                }
-                if (labels.Count > 0) //We have labels to render...
-                {
-                    if (Style.CollisionDetection && _labelFilter != null)
-                        _labelFilter(labels);
-                    
-                    for (int i = 0; i < labels.Count; i++)
-                    {   
-                        // Don't show the label if not necessary
-                        if (!labels[i].Show)
+                        else if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.First)
                         {
-                            continue;
-                        }
-
-                        if (labels[i] is Label)
-                        {
-                            var label = labels[i] as Label;
-                            if (label.Style.IsTextOnPath == false || label.TextOnPathLabel==null)
+                            if ((feature.Geometry as IGeometryCollection).NumGeometries > 0)
                             {
-                                VectorRenderer.DrawLabel(g, label.Location, label.Style.Offset,
-                                                            label.Style.Font, label.Style.ForeColor,
-                                                            label.Style.BackColor, label.Style.Halo, label.Rotation,
-                                                            label.Text, map, label.Style.HorizontalAlignment,
-                                                            label.LabelPoint);
+                                BaseLabel lbl = CreateLabel(feature, (feature.Geometry as IGeometryCollection).GetGeometryN(0), text,
+                                    rotation, style, map, g);
+                                if (lbl != null)
+                                    labels.Add(lbl);
                             }
-                            else
+                        }
+                        else if (MultipartGeometryBehaviour == MultipartGeometryBehaviourEnum.Largest)
+                        {
+                            var coll = (feature.Geometry as IGeometryCollection);
+                            if (coll.NumGeometries > 0)
                             {
-                                if (label.Style.BackColor != null && label.Style.BackColor != System.Drawing.Brushes.Transparent)
+                                var largestVal = 0d;
+                                var idxOfLargest = 0;
+                                for (var j = 0; j < coll.NumGeometries; j++)
                                 {
-                                    //draw background
-                                    if (label.TextOnPathLabel.RegionList.Count > 0)
+                                    var geom = coll.GetGeometryN(j);
+                                    if (geom is ILineString && ((ILineString) geom).Length > largestVal)
                                     {
-                                        g.FillRectangles(labels[i].Style.BackColor, labels[i].TextOnPathLabel.RegionList.ToArray());
-                                        //g.FillPolygon(labels[i].Style.BackColor, labels[i].TextOnPathLabel.PointsText.ToArray());
+                                        largestVal = ((ILineString) geom).Length;
+                                        idxOfLargest = j;
+                                    }
+                                    if (geom is IMultiLineString && ((IMultiLineString) geom).Length > largestVal)
+                                    {
+                                        largestVal = ((IMultiLineString) geom).Length;
+                                        idxOfLargest = j;
+                                    }
+                                    if (geom is IPolygon && ((IPolygon) geom).Area > largestVal)
+                                    {
+                                        largestVal = ((IPolygon) geom).Area;
+                                        idxOfLargest = j;
+                                    }
+                                    if (geom is IMultiPolygon && ((IMultiPolygon) geom).Area > largestVal)
+                                    {
+                                        largestVal = ((IMultiPolygon) geom).Area;
+                                        idxOfLargest = j;
                                     }
                                 }
-                                label.TextOnPathLabel.DrawTextOnPath();
+
+                                BaseLabel lbl = CreateLabel(feature, coll.GetGeometryN(idxOfLargest), text, rotation, priority, style,
+                                    map, g, _getLocationMethod);
+                                if (lbl != null)
+                                    labels.Add(lbl);
                             }
                         }
-                        else if (labels[i] is PathLabel)
+                    }
+                    else
+                    {
+                        BaseLabel lbl = CreateLabel(feature, feature.Geometry, text, rotation, priority, style, map, g, _getLocationMethod);
+                        if (lbl != null)
+                            labels.Add(lbl);
+                    }
+                }
+            }
+            if (labels.Count > 0) //We have labels to render...
+            {
+                if (Style.CollisionDetection && _labelFilter != null)
+                    _labelFilter(labels);
+
+                for (int i = 0; i < labels.Count; i++)
+                {
+                    // Don't show the label if not necessary
+                    if (!labels[i].Show)
+                    {
+                        continue;
+                    }
+
+                    if (labels[i] is Label)
+                    {
+                        var label = labels[i] as Label;
+                        if (label.Style.IsTextOnPath == false || label.TextOnPathLabel == null)
                         {
-                            var plbl = labels[i] as PathLabel;
-                            var lblStyle = plbl.Style;
-                            g.DrawString(lblStyle.Halo, new SolidBrush(lblStyle.ForeColor), plbl.Text,
-                                         lblStyle.Font.FontFamily, (int) lblStyle.Font.Style, lblStyle.Font.Size,
-                                         lblStyle.GetStringFormat(), lblStyle.IgnoreLength, plbl.Location);
+                            VectorRenderer.DrawLabel(g, label.Location, label.Style.Offset,
+                                label.Style.GetFontForGraphics(g), label.Style.ForeColor,
+                                label.Style.BackColor, label.Style.Halo, label.Rotation,
+                                label.Text, map, label.Style.HorizontalAlignment,
+                                label.LabelPoint);
                         }
+                        else
+                        {
+                            if (label.Style.BackColor != null && label.Style.BackColor != System.Drawing.Brushes.Transparent)
+                            {
+                                //draw background
+                                if (label.TextOnPathLabel.RegionList.Count > 0)
+                                {
+                                    g.FillRectangles(labels[i].Style.BackColor, labels[i].TextOnPathLabel.RegionList.ToArray());
+                                    //g.FillPolygon(labels[i].Style.BackColor, labels[i].TextOnPathLabel.PointsText.ToArray());
+                                }
+                            }
+                            label.TextOnPathLabel.DrawTextOnPath();
+                        }
+                    }
+                    else if (labels[i] is PathLabel)
+                    {
+                        var plbl = labels[i] as PathLabel;
+                        var lblStyle = plbl.Style;
+                        g.DrawString(lblStyle.Halo, new SolidBrush(lblStyle.ForeColor), plbl.Text,
+                            lblStyle.Font.FontFamily, (int) lblStyle.Font.Style, lblStyle.Font.Size,
+                            lblStyle.GetStringFormat(), lblStyle.IgnoreLength, plbl.Location);
                     }
                 }
             }
@@ -623,18 +606,19 @@ namespace SharpMap.Layers
         }
 
 
-        private BaseLabel CreateLabel(IFeature fdr, IGeometry feature, string text, float rotation, LabelStyle style, Map map, Graphics g)
+        private BaseLabel CreateLabel(FeatureDataRow fdr, IGeometry feature, string text, float rotation, LabelStyle style, MapViewport map, Graphics g)
         {
             return CreateLabel(fdr, feature, text, rotation, Priority, style, map, g, _getLocationMethod);
         }
 
-        private static BaseLabel CreateLabel(IFeature fdr, IGeometry feature, string text, float rotation, int priority, LabelStyle style, Map map, Graphics g, GetLocationMethod _getLocationMethod)
+        private static BaseLabel CreateLabel(FeatureDataRow fdr, IGeometry feature, string text, float rotation, int priority, LabelStyle style, MapViewport map, Graphics g, GetLocationMethod _getLocationMethod)
         {
             if (feature == null) return null;
 
             BaseLabel lbl = null;
+            var font = style.GetFontForGraphics(g);
 
-            SizeF size = VectorRenderer.SizeOfString(g, text, style.Font);
+            SizeF size = VectorRenderer.SizeOfString(g, text, font);
 
             if (feature is ILineal)
             {
@@ -681,7 +665,7 @@ namespace SharpMap.Layers
 
             if (worldPosition == null) return null;
 
-            var position = Transform.WorldtoMap(worldPosition, map);
+            var position = map.WorldToImage(worldPosition);
 
             var location = new PointF(
                 position.X - size.Width*(short) style.HorizontalAlignment*0.5f,
@@ -698,10 +682,10 @@ namespace SharpMap.Layers
             {
                 //Collision detection is enabled so we need to measure the size of the string
                 lbl = new Label(text, location, rotation, priority,
-                                new LabelBox(location.X - size.Width*0.5f - style.CollisionBuffer.Width,
-                                             location.Y + size.Height*0.5f + style.CollisionBuffer.Height,
+                                new LabelBox(location.X - style.CollisionBuffer.Width,
+                                             location.Y - style.CollisionBuffer.Height,
                                              size.Width + 2f*style.CollisionBuffer.Width,
-                                             size.Height + style.CollisionBuffer.Height*2f), style) 
+                                             size.Height + 2f*style.CollisionBuffer.Height), style) 
                                 { LabelPoint = position }; 
             }
 
@@ -770,7 +754,7 @@ namespace SharpMap.Layers
         /// <param name="map">The map</param>
         /// <!--<param name="useClipping">A value indicating whether clipping should be applied or not</param>-->
         /// <returns>A GraphicsPath</returns>
-        public static GraphicsPath LineStringToPath(ILineString lineString, Map map/*, bool useClipping*/)
+        public static GraphicsPath LineStringToPath(ILineString lineString, MapViewport map/*, bool useClipping*/)
         {
             var gp = new GraphicsPath(FillMode.Alternate);
             //if (!useClipping)
@@ -863,7 +847,7 @@ namespace SharpMap.Layers
             label.Location = map.WorldToImage(new Coordinate(tmpx, tmpy));
         }
 
-        private static void CalculateLabelAroundOnLineString(ILineString line, ref BaseLabel label, Map map, System.Drawing.Graphics g, System.Drawing.SizeF textSize)
+        private static void CalculateLabelAroundOnLineString(ILineString line, ref BaseLabel label, MapViewport map, System.Drawing.Graphics g, System.Drawing.SizeF textSize)
         {
             var sPoints = line.Coordinates;
 
@@ -968,6 +952,7 @@ namespace SharpMap.Layers
                         count++;
                     }
                 }
+                /*
                 //get text size in page units ie pixels
                 float textheight = label.Style.Font.Size;
                 switch (label.Style.Font.Unit)
@@ -991,7 +976,9 @@ namespace SharpMap.Layers
                         textheight = textheight * g.DpiY / 72;
                         break;
                 }
-                var topFont = new Font(label.Style.Font.FontFamily, textheight, label.Style.Font.Style);
+                var topFont = new Font(label.Style.Font.FontFamily, textheight, label.Style.Font.Style, GraphicsUnit.Pixel);
+                 */
+                var topFont = label.Style.GetFontForGraphics(g);
                 //
                 var path = new GraphicsPath();
                 path.AddLines(points);

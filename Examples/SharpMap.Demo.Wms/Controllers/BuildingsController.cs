@@ -1,5 +1,3 @@
-using SharpMap.Features;
-
 namespace SharpMap.Demo.Wms.Controllers
 {
     using System;
@@ -54,7 +52,7 @@ namespace SharpMap.Demo.Wms.Controllers
             bbox.ExpandToInclude(new Coordinate(n, w));
             bbox.ExpandToInclude(new Coordinate(s, e));
 
-            var ds = new FeatureCollectionSet();
+            FeatureDataSet ds = new FeatureDataSet();
             using (ShapeFile provider = new ShapeFile(path))
             {
                 provider.DoTrueIntersectionQuery = true;
@@ -65,10 +63,10 @@ namespace SharpMap.Demo.Wms.Controllers
 
             int zz = MaxZoom - z;
             List<object> data = new List<object>();
-            var table = ds[0];
-            foreach (var row in table)
+            FeatureDataTable table = ds.Tables[0];
+            foreach (FeatureDataRow row in table)
             {
-                int c = (short)(row.Attributes["height"]);
+                int c = (short)(row["height"]);
                 if (c == 0)
                     c = 5; // default value for "null" (zero) heights
                 int h = c * ScaleZ >> zz;

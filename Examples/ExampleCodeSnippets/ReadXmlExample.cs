@@ -71,12 +71,12 @@
 
             var factory = new NetTopologySuite.Geometries.GeometryFactory();
 
-            SharpMap.Data.Providers.FeatureProvider p = null;
+            SharpMap.Data.Providers.GeometryProvider p = null;
             using (var fs = System.IO.File.OpenRead(xmlFileName))
             {
-                p = new SharpMap.Data.Providers.FeatureProvider(PointsFromXml(factory, fs));
+                p = new SharpMap.Data.Providers.GeometryProvider(PointsFromXml(factory, fs));
                 NUnit.Framework.Assert.IsNotNull(p);
-                NUnit.Framework.Assert.AreEqual(1, p.Features.Count);
+                NUnit.Framework.Assert.AreEqual(1, p.Geometries.Count);
             }
 
             System.IO.File.Delete(xmlFileName);

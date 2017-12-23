@@ -171,7 +171,7 @@ namespace ExampleCodeSnippets
         public void TestLayer()
         {
             var map = new SharpMap.Map(new System.Drawing.Size(500, 500));
-            var gp = new SharpMap.Data.Providers.FeatureProvider(
+            var gp = new SharpMap.Data.Providers.GeometryProvider(
                 new[]
                     {
                         Factory.CreatePolygon(

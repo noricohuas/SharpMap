@@ -22,6 +22,13 @@ namespace SharpMap.Styles
     /// <summary>
     /// Defines an interface for defining layer styles
     /// </summary>
+    /// <remarks>
+    /// Implementation should 
+    /// <list type="Bullet">
+    /// <item>be treated as immutable once assigned to a <see cref="SharpMap.Layers.Layer"/>.</item>
+    /// <item>consider also implementing <see cref="T:System.ICloneable"/> and clone all graphic objects.</item>
+    /// </list>
+    /// </remarks>
     public interface IStyle : IDisposable
     {
         /// <summary>
@@ -33,6 +40,11 @@ namespace SharpMap.Styles
         /// Gets or sets the maximum zoom value where the style is applied
         /// </summary>
         double MaxVisible { get; set; }
+
+        /// <summary>
+        /// Gets or Sets what level-reference the Min/Max values are defined in
+        /// </summary>
+        VisibilityUnits VisibilityUnits { get; set; }
 
         /// <summary>
         /// Gets or sets whether objects in this style is rendered or not

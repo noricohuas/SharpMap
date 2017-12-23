@@ -1,5 +1,5 @@
 ﻿using System;
-using SharpMap.Data;
+using BruTile.Predefined;
 
 namespace WinFormSamples.Samples
 {
@@ -14,11 +14,11 @@ namespace WinFormSamples.Samples
                 case 3:
                     return InitializeMapOsm();
                 case 4:
-                    return InitializeMapBing(BruTile.Web.BingMapType.Roads);
+                    return InitializeMapBing(KnownTileSource.BingRoadsStaging);
                 case 5:
-                    return InitializeMapBing(BruTile.Web.BingMapType.Aerial);
+                    return InitializeMapBing(KnownTileSource.BingAerialStaging);
                 case 6:
-                    return InitializeMapBing(BruTile.Web.BingMapType.Hybrid);
+                    return InitializeMapBing(KnownTileSource.BingHybridStaging);
                     _num = 0;
                     /*
                 case 7:
@@ -52,24 +52,26 @@ namespace WinFormSamples.Samples
         {
             var map = new SharpMap.Map();
 
-            var tileLayer = new SharpMap.Layers.TileAsyncLayer(new BruTile.Web.OsmTileSource(), "TileLayer - OSM");
+            var tileLayer = new SharpMap.Layers.TileAsyncLayer(
+                KnownTileSources.Create(KnownTileSource.OpenStreetMap), "TileLayer - OSM");
             map.BackgroundLayer.Add(tileLayer);
             map.ZoomToBox(tileLayer.Envelope);
             
             return map;
         }
 
-        private const string XlsConnectionString = @"Provider=Microsoft.Jet.OLEDB.4.0;Data Source={0}\{1};Extended Properties=""Excel 8.0;HDR=Yes;IMEX=1""";
+        private const string XlsConnectionString = "Provider={2};Data Source={0}\\{1};Extended Properties=\"Excel 8.0;HDR=Yes;IMEX=1\"";
 
         private static SharpMap.Map InitializeMapOsmWithXls(float angle)
         {
             var map = new SharpMap.Map();
 
-            var tileLayer = new SharpMap.Layers.TileAsyncLayer(new BruTile.Web.OsmTileSource(), "TileLayer - OSM with XLS");
+            var tileLayer = new SharpMap.Layers.TileAsyncLayer(
+                KnownTileSources.Create(KnownTileSource.OpenStreetMap), "TileLayer - OSM with XLS");
             map.BackgroundLayer.Add(tileLayer);
 
             //Get data from excel
-            var xlsPath = string.Format(XlsConnectionString, System.IO.Directory.GetCurrentDirectory(), "GeoData\\Cities.xls");
+            var xlsPath = string.Format(XlsConnectionString, System.IO.Directory.GetCurrentDirectory(), "GeoData\\Cities.xls", Properties.Settings.Default.OleDbProvider);
             var ds = new System.Data.DataSet("XLS");
             using (var cn = new System.Data.OleDb.OleDbConnection(xlsPath))
             {
@@ -77,8 +79,6 @@ namespace WinFormSamples.Samples
                 using (var da = new System.Data.OleDb.OleDbDataAdapter(new System.Data.OleDb.OleDbCommand("SELECT * FROM [Cities$]", cn)))
                     da.Fill(ds);
             }
-
-#if !DotSpatialProjections
 
             //The SRS for this datasource is EPSG:4326, therefore we need to transfrom it to OSM projection
             var ctf = new ProjNet.CoordinateSystems.Transformations.CoordinateTransformationFactory();
@@ -95,19 +95,6 @@ namespace WinFormSamples.Samples
                 row["Y"] = coords[1];
             }
 
-#else
-            var epsg4326 = DotSpatial.Projections.KnownCoordinateSystems.Geographic.World.WGS1984;
-            var epsg3857 = DotSpatial.Projections.ProjectionInfo.FromEsriString("PROJCS[\"Popular Visualisation CRS / Mercator\", GEOGCS[\"Popular Visualisation CRS\", DATUM[\"Popular Visualisation Datum\", SPHEROID[\"Popular Visualisation Sphere\", 6378137, 0, AUTHORITY[\"EPSG\",\"7059\"]], TOWGS84[0, 0, 0, 0, 0, 0, 0], AUTHORITY[\"EPSG\",\"6055\"]],PRIMEM[\"Greenwich\", 0, AUTHORITY[\"EPSG\", \"8901\"]], UNIT[\"degree\", 0.0174532925199433, AUTHORITY[\"EPSG\", \"9102\"]], AXIS[\"E\", EAST], AXIS[\"N\", NORTH], AUTHORITY[\"EPSG\",\"4055\"]], PROJECTION[\"Mercator\"], PARAMETER[\"False_Easting\", 0], PARAMETER[\"False_Northing\", 0], PARAMETER[\"Central_Meridian\", 0], PARAMETER[\"Latitude_of_origin\", 0], UNIT[\"metre\", 1, AUTHORITY[\"EPSG\", \"9001\"]], AXIS[\"East\", EAST], AXIS[\"North\", NORTH], AUTHORITY[\"EPSG\",\"3857\"]]");
-            foreach (System.Data.DataRow row in ds.Tables[0].Rows)
-            {
-                if (row["X"] == DBNull.Value || row["Y"] == DBNull.Value) continue;
-                var coords = new[] { Convert.ToDouble(row["X"]), Convert.ToDouble(row["Y"])};
-                DotSpatial.Projections.Reproject.ReprojectPoints(coords, null, epsg4326, epsg3857, 0, 1);
-                row["X"] = coords[0];
-                row["Y"] = coords[1];
-            }
-
-#endif
             //Add Rotation Column
             ds.Tables[0].Columns.Add("Rotation", typeof (float));
             foreach (System.Data.DataRow row in ds.Tables[0].Rows)
@@ -133,6 +120,8 @@ namespace WinFormSamples.Samples
                                         LabelFilter =
                                             SharpMap.Rendering.LabelCollisionDetection.ThoroughCollisionDetection
                                     };
+            xlsLabelLayer.Theme = new SharpMap.Rendering.Thematics.FontSizeTheme(xlsLabelLayer, map) { FontSizeScale = 1000f };
+
             map.Layers.Add(xlsLabelLayer);
 
             map.ZoomToBox(tileLayer.Envelope);
@@ -167,8 +156,6 @@ namespace WinFormSamples.Samples
             return map;
         }
 
-#if !DotSpatialProjections
-
         private static GeoAPI.CoordinateSystems.Transformations.ICoordinateTransformation GetCoordinateTransformation()
         {
 
@@ -178,20 +165,14 @@ namespace WinFormSamples.Samples
             var epsg4326 = cf.CreateFromWkt("GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.01745329251994328,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]");
             var epsg3857 = cf.CreateFromWkt("PROJCS[\"Popular Visualisation CRS / Mercator\", GEOGCS[\"Popular Visualisation CRS\", DATUM[\"Popular Visualisation Datum\", SPHEROID[\"Popular Visualisation Sphere\", 6378137, 0, AUTHORITY[\"EPSG\",\"7059\"]], TOWGS84[0, 0, 0, 0, 0, 0, 0], AUTHORITY[\"EPSG\",\"6055\"]],PRIMEM[\"Greenwich\", 0, AUTHORITY[\"EPSG\", \"8901\"]], UNIT[\"degree\", 0.0174532925199433, AUTHORITY[\"EPSG\", \"9102\"]], AXIS[\"E\", EAST], AXIS[\"N\", NORTH], AUTHORITY[\"EPSG\",\"4055\"]], PROJECTION[\"Mercator\"], PARAMETER[\"False_Easting\", 0], PARAMETER[\"False_Northing\", 0], PARAMETER[\"Central_Meridian\", 0], PARAMETER[\"Latitude_of_origin\", 0], UNIT[\"metre\", 1, AUTHORITY[\"EPSG\", \"9001\"]], AXIS[\"East\", EAST], AXIS[\"North\", NORTH], AUTHORITY[\"EPSG\",\"3857\"]]");
             return ctf.CreateFromCoordinateSystems(epsg4326, epsg3857);
-#else
-        private static DotSpatial.Projections.ICoordinateTransformation GetCoordinateTransformation()
-        {
-            var epsg4326 = DotSpatial.Projections.KnownCoordinateSystems.Geographic.World.WGS1984;
-            var epsg3857 = DotSpatial.Projections.ProjectionInfo.FromEsriString("PROJCS[\"Popular Visualisation CRS / Mercator\", GEOGCS[\"Popular Visualisation CRS\", DATUM[\"Popular Visualisation Datum\", SPHEROID[\"Popular Visualisation Sphere\", 6378137, 0, AUTHORITY[\"EPSG\",\"7059\"]], TOWGS84[0, 0, 0, 0, 0, 0, 0], AUTHORITY[\"EPSG\",\"6055\"]],PRIMEM[\"Greenwich\", 0, AUTHORITY[\"EPSG\", \"8901\"]], UNIT[\"degree\", 0.0174532925199433, AUTHORITY[\"EPSG\", \"9102\"]], AXIS[\"E\", EAST], AXIS[\"N\", NORTH], AUTHORITY[\"EPSG\",\"4055\"]], PROJECTION[\"Mercator\"], PARAMETER[\"False_Easting\", 0], PARAMETER[\"False_Northing\", 0], PARAMETER[\"Central_Meridian\", 0], PARAMETER[\"Latitude_of_origin\", 0], UNIT[\"metre\", 1, AUTHORITY[\"EPSG\", \"9001\"]], AXIS[\"East\", EAST], AXIS[\"North\", NORTH], AUTHORITY[\"EPSG\",\"3857\"]]");
-            return new DotSpatial.Projections.CoordinateTransformation { Source = epsg4326, Target = epsg3857 };
-#endif
         }
 
-        private static SharpMap.Map InitializeMapBing(BruTile.Web.BingMapType mt)
+        private static SharpMap.Map InitializeMapBing(KnownTileSource mt)
         {
             var map = new SharpMap.Map();
 
-            var tileLayer = new SharpMap.Layers.TileLayer(new BruTile.Web.BingTileSource(BruTile.Web.BingRequest.UrlBingStaging, "", mt), "TileLayer - Bing " + mt);
+            var tileLayer = new SharpMap.Layers.TileLayer(
+                KnownTileSources.Create(mt), "TileLayer - Bing " + mt);
             map.BackgroundLayer.Add(tileLayer);
             map.ZoomToBox(tileLayer.Envelope);
             return map;
@@ -260,11 +241,11 @@ namespace WinFormSamples.Samples
             {
                 _brush = brush;
             }
-            public SharpMap.Styles.IStyle GetStyle(GeoAPI.Features.IFeature fdr)
+            public SharpMap.Styles.IStyle GetStyle(SharpMap.Data.FeatureDataRow fdr)
             {
                 var retval = new SharpMap.Styles.VectorStyle();
 
-                if (fdr.Attributes["Bearing"] == DBNull.Value)
+                if (fdr["Bearing"] == DBNull.Value)
                 {
                     var bmp = new System.Drawing.Bitmap(36, 36);
                     using (var g = System.Drawing.Graphics.FromImage(bmp))
@@ -287,7 +268,7 @@ namespace WinFormSamples.Samples
                 else
                 {
                     retval.Symbol = ColoredArrow(_brush);
-                    var rot =  Convert.ToSingle(fdr.Attributes["Bearing"]);
+                    var rot =  (Single)(Double)fdr["Bearing"];
                     retval.SymbolRotation = rot % 360f;
                 }
                 return retval;
@@ -299,7 +280,7 @@ namespace WinFormSamples.Samples
         /// This class is directly derived from GreatMaps
         /// http://gmaps.codeplex.com
         /// </summary>
-        private class VilniusTransportData : SharpMap.Data.Providers.FeatureProvider
+        private class VilniusTransportData : SharpMap.Data.Providers.GeometryFeatureProvider
         {
 
             private bool _isActive;
@@ -480,15 +461,15 @@ namespace WinFormSamples.Samples
                 }
 
                 Features.Clear();
-                var features = (FeatureDataTable) Features;
+
                 foreach (SharpMap.Data.FeatureDataRow featureDataRow in fdt.Rows)
                 {
-                    var fdr = features.NewRow();
+                    var fdr = Features.NewRow();
                     fdr.ItemArray = featureDataRow.ItemArray;
                     fdr.Geometry = featureDataRow.Geometry;
-                    features.AddRow(fdr);
+                    Features.AddRow(fdr);
                 }
-                features.AcceptChanges();
+                Features.AcceptChanges();
 
                 _isActive = false;
             }

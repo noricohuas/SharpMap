@@ -20,7 +20,7 @@ namespace UnitTests.Serialization
             {
                 default:
                 //case "geometryprovider":
-                    return CreateProvider<FeatureProvider>();
+                    return CreateProvider<GeometryProvider>();
                 case "shapefile":
                     return CreateProvider<ShapeFile>();
                 case "managedspatialite":
@@ -37,20 +37,23 @@ namespace UnitTests.Serialization
         {
             var gf = GeoAPI.GeometryServiceProvider.Instance.CreateGeometryFactory();
 
-            if (typeof(T) == typeof(FeatureProvider))
-                return (T)(IProvider)new FeatureProvider(gf.CreatePoint(new Coordinate(1, 1)));
+            if (typeof(T) == typeof(GeometryProvider))
+                return (T)(IProvider)new GeometryProvider(gf.CreatePoint(new Coordinate(1, 1)));
 
             if (typeof(T) == typeof(ManagedSpatiaLite))
-                return (T)(IProvider) new ManagedSpatiaLite("Data Source=test-2.3.sqlite;Database=Regions;",
-                                                            "Roads", "Geometry", "PK_UID");
+                return (T)(IProvider)new ManagedSpatiaLite("Data Source=TestData\\test-2.3.sqlite;",
+                                                            "HighWays", "Geometry", "PK_UID");
 
             if (typeof(T) == typeof(SpatiaLite))
-                return (T)(IProvider)new SpatiaLite("Data Source=test-2.3.sqlite;Database=Regions;",
-                                                    "Roads", "Geometry", "PK_UID");
+                return (T)(IProvider)new SpatiaLite("Data Source=TestData\\test-2.3.sqlite;",
+                                                            "HighWays", "Geometry", "PK_UID");
+
+            if (typeof(T) == typeof(ShapeFile))
+                return (T)(IProvider)new ShapeFile("TestData\\roads_ugl.shp");
 
             if (typeof(T) == typeof(SqlServer2008))
                 return (T)(IProvider)new SqlServer2008("Data Source=IVV-SQLD; Database=OBE;Integrated Security=SSPI;",
-                                                       "roads", "wkb_geometry", "ogc_fid", SqlServerSpatialObjectType.Geometry);
+                                                       "Roads", "wkb_geometry", "ogc_fid", SqlServerSpatialObjectType.Geometry);
 
             if (typeof(T) == typeof(PostGIS))
                 return (T)(IProvider)new PostGIS("Host=127.0.0.1;Port=5432;User Id=postgres;Password=1.Kennwort;database=postgis_sample;",
@@ -61,14 +64,14 @@ namespace UnitTests.Serialization
         [Test]
         public void TestGeometryProvider()
         {
-            var gpS = CreateProvider<FeatureProvider>();
+            var gpS = CreateProvider<GeometryProvider>();
             var gpD = SandD(gpS, GetFormatter());
 
             Assert.AreEqual(gpS.GetType(), gpD.GetType());
-            Assert.AreEqual(gpS.Features.Count, gpD.Features.Count);
+            Assert.AreEqual(gpS.Geometries.Count, gpD.Geometries.Count);
             Assert.AreEqual(gpS.GetExtents(), gpD.GetExtents());
 
-            Assert.IsTrue(gpS.Features[0].Geometry.Coordinate.X == 1);
+            Assert.IsTrue(gpS.Geometries[0].Coordinate.X == 1);
         }
 
         [Test]

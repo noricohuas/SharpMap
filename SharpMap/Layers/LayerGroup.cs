@@ -16,12 +16,14 @@
 // Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 
 using System;
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.Drawing;
-using GeoAPI.Features;
+using System.Linq;
 using SharpMap.Data;
 using GeoAPI.Geometries;
 using SharpMap.Styles;
+using GeoAPI.CoordinateSystems.Transformations;
 
 namespace SharpMap.Layers
 {
@@ -33,10 +35,39 @@ namespace SharpMap.Layers
     /// for instance a set of image tiles, and expose them as a single layer
     /// </remarks>
     [Serializable]
-    public class LayerGroup : Layer, ICanQueryLayer
+    public partial class LayerGroup : Layer, ICanQueryLayer, ICloneable, ILayersContainer
     {
-        private Collection<Layer> _layers;
+        private ObservableCollection<ILayer> _layers;
         private bool _isQueryEnabled = true;
+
+        /// <summary>
+        /// Event fired when the Layers collection is replaced.
+        /// </summary>
+        public event EventHandler LayersChanged;
+
+        /// <summary>
+        /// Fires the LayersChanged event.
+        /// </summary>
+        protected virtual void OnLayersChanged()
+        {
+            EventHandler handler = LayersChanged;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Event fires when the Layers collection is going to be replaced.
+        /// </summary>
+        public event EventHandler LayersChanging;
+
+        /// <summary>
+        /// Fires the LayersChanging event.
+        /// </summary>
+        protected virtual void OnLayersChanging()
+        {
+            EventHandler handler = LayersChanging;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
+
         /// <summary>
         /// Initializes a new group layer
         /// </summary>
@@ -44,12 +75,12 @@ namespace SharpMap.Layers
         public LayerGroup(string layername)
         {
             LayerName = layername;
-            _layers = new Collection<Layer>();
+            _layers = new ObservableCollection<ILayer>();
         }
         /// <summary>
         /// Whether the layer is queryable when used in a SharpMap.Web.Wms.WmsServer, ExecuteIntersectionQuery() will be possible in all other situations when set to FALSE
         /// </summary>
-        public bool IsQueryEnabled
+        public virtual bool IsQueryEnabled
         {
             get { return _isQueryEnabled; }
             set { _isQueryEnabled = value; }
@@ -57,10 +88,21 @@ namespace SharpMap.Layers
         /// <summary>
         /// Sublayers in the group
         /// </summary>
-        public Collection<Layer> Layers
+        public virtual ObservableCollection<ILayer> Layers
         {
             get { return _layers; }
-            set { _layers = value; }
+            set
+            {
+                if (value == null)
+                    throw new ArgumentNullException("value");
+
+                if (!Equals(value, _layers))
+                {
+                    OnLayersChanging();
+                    _layers = value;
+                    OnLayersChanged();
+                }
+            }
         }
 
         /// <summary>
@@ -71,12 +113,74 @@ namespace SharpMap.Layers
         {
             get
             {
-                if (Layers.Count == 0)
-                    return null;
-                var bbox = new Envelope(Layers[0].Envelope);
-                for (int i = 1; i < Layers.Count; i++)
-                    bbox.ExpandToInclude(Layers[i].Envelope);
+                Envelope bbox = null;
+                var layers = GetSnapshot();
+
+                for (int i = 0; i < layers.Length; i++)
+                {
+                    var layerEnvelope = layers[i].Envelope;
+                    if (layerEnvelope != null)
+                    {
+                        if(bbox == null)
+                            bbox = new Envelope(layerEnvelope);
+                        else
+                            bbox.ExpandToInclude(layerEnvelope);
+                    }
+                }
+                    
                 return bbox;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets whether coordinate transformations applied to the group should propagate to inner layers.
+        /// </summary>
+        /// <remarks>
+        /// Default is false, transformations are propagated to children layers.
+        /// </remarks>
+        public virtual bool SkipTransformationPropagation { get; set; }
+
+        /// <summary>
+        /// Gets or sets the <see cref="GeoAPI.CoordinateSystems.Transformations.ICoordinateTransformation"/> applied 
+        /// to this vectorlayer prior to rendering
+        /// </summary>
+
+        public override ICoordinateTransformation CoordinateTransformation
+        {
+            get { return base.CoordinateTransformation; }
+            set
+            {
+                base.CoordinateTransformation = value;
+
+                if (!SkipTransformationPropagation)
+                {
+                    var layers = GetSnapshot();
+
+                    foreach (var layer in layers.OfType<Layer>())
+                        layer.CoordinateTransformation = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Certain Transformations cannot be inverted in ProjNet, in those cases use this property to set the reverse <see cref="GeoAPI.CoordinateSystems.Transformations.ICoordinateTransformation"/> (of CoordinateTransformation) to fetch data from Datasource
+        /// 
+        /// If your CoordinateTransformation can be inverted you can leave this property to null
+        /// </summary>
+        public override ICoordinateTransformation ReverseCoordinateTransformation
+        {
+            get { return base.ReverseCoordinateTransformation; }
+            set
+            {
+                base.ReverseCoordinateTransformation = value;
+
+                if (!SkipTransformationPropagation)
+                {
+                    var layers = GetSnapshot();
+
+                    foreach (var layer in layers.OfType<Layer>())
+                        layer.ReverseCoordinateTransformation = value;
+                }
             }
         }
 
@@ -87,9 +191,9 @@ namespace SharpMap.Layers
         /// </summary>
         protected override void ReleaseManagedResources()
         {
-            foreach (var layer in Layers)
-                if (layer != null)
-                    layer.Dispose();
+            var layers = GetSnapshot();
+            foreach (var layer in layers.OfType<IDisposable>().Where(layer => layer != null))
+                layer.Dispose();
             
             Layers.Clear();
             base.ReleaseManagedResources();
@@ -102,15 +206,11 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="name">Name of layer</param>
         /// <returns>Layer</returns>
-        public Layer GetLayerByName(string name)
+        public virtual ILayer GetLayerByName(string name)
         {
-            //return _Layers.Find( delegate(SharpMap.Layers.Layer layer) { return layer.LayerName.Equals(name); });
+            var layers = GetSnapshot();
 
-            for (int i = 0; i < _layers.Count; i++)
-                if (String.Equals(_layers[i].LayerName, name, StringComparison.InvariantCultureIgnoreCase))
-                    return _layers[i];
-
-            return null;
+            return layers.FirstOrDefault(t => String.Equals(t.LayerName, name, StringComparison.InvariantCultureIgnoreCase));
         }
 
         /// <summary>
@@ -118,11 +218,19 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="g">Graphics object reference</param>
         /// <param name="map">Map which is rendered</param>
-        public override void Render(Graphics g, Map map)
+        public override void Render(Graphics g, MapViewport map)
         {
-            for (int i = 0; i < _layers.Count; i++)
-                if (_layers[i].Enabled && _layers[i].MaxVisible >= map.Zoom && _layers[i].MinVisible < map.Zoom)
-                    _layers[i].Render(g, map);
+            var layers = GetSnapshot();
+            var compare = VisibilityUnits == VisibilityUnits.ZoomLevel 
+                ? map.Zoom 
+                : map.GetMapScale((int)g.DpiX);
+
+            foreach (var layer in layers)
+            {
+                if (layer.Enabled && layer.MaxVisible >= compare &&
+                    layer.MinVisible < compare)
+                    layer.Render(g, map);
+            }
         }
 
          #region Implementation of ICanQueryLayer
@@ -132,14 +240,13 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="box">Geometry to intersect with</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet ds)
+        public virtual void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
         {
-            foreach (Layer layer in Layers)
+            var layers = GetSnapshot();
+
+            foreach (var layer in layers.OfType<ICanQueryLayer>())
             {
-                if (layer is ICanQueryLayer)
-                {
-                    ((ICanQueryLayer)layer).ExecuteIntersectionQuery(box, ds);
-                }
+                layer.ExecuteIntersectionQuery(box, ds);
             }
         }
 
@@ -148,17 +255,75 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="geometry">Geometry to intersect with</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(IGeometry geometry, IFeatureCollectionSet ds)
+        public virtual void ExecuteIntersectionQuery(IGeometry geometry, FeatureDataSet ds)
         {
-            foreach (var layer in Layers)
+            var layers = GetSnapshot();
+
+            foreach (var layer in layers.OfType<ICanQueryLayer>())
             {
-                if (layer is ICanQueryLayer)
-                {
-                    ((ICanQueryLayer)layer).ExecuteIntersectionQuery(geometry, ds);
-                }
+                layer.ExecuteIntersectionQuery(geometry, ds);
             }
         }
 
          #endregion
+
+        /// <summary>
+        /// Create an empty new LayerGroup instance.
+        /// </summary>
+        /// <remarks>This is used by the Clone() method, inheritors must override this method.</remarks>
+        /// <returns>Returns an empty LayerGroup.</returns>
+        protected virtual LayerGroup CreateUninitializedInstance()
+        {
+            return new LayerGroup(LayerName);
+        }
+
+        /// <summary>
+        /// Returns a cloned copy of the group.
+        /// </summary>
+        /// <returns></returns>
+        public virtual object Clone()
+        {
+            var clonedGroup = CreateUninitializedInstance();
+
+            clonedGroup.CoordinateTransformation = CoordinateTransformation;
+            clonedGroup.Enabled = Enabled;
+            clonedGroup.IsQueryEnabled = IsQueryEnabled;
+            clonedGroup.MaxVisible = MaxVisible;
+            clonedGroup.VisibilityUnits = VisibilityUnits;
+            clonedGroup.MinVisible = MinVisible;
+            clonedGroup.Proj4Projection = Proj4Projection;
+            clonedGroup.SRID = SRID;
+            clonedGroup.ReverseCoordinateTransformation = ReverseCoordinateTransformation;
+            clonedGroup.Style = Style;
+            clonedGroup.TargetSRID = TargetSRID;
+
+            var layers = GetSnapshot();
+            foreach (var layer in layers)
+            {
+                var cloneable = layer as ICloneable;
+                if (cloneable != null)
+                    clonedGroup.Layers.Add((ILayer) cloneable.Clone());
+                else
+                    clonedGroup.Layers.Add(layer);
+            }
+
+            return clonedGroup;
+        }
+
+        private ILayer[] GetSnapshot()
+        {
+            ILayer[] layers;
+            lock (((ICollection)Layers).SyncRoot)
+            {
+                layers = Layers.ToArray();
+            }
+
+            return layers;
+        }
+
+        System.Collections.Generic.IList<ILayer> ILayersContainer.Layers
+        {
+            get { return Layers; }
+        }
     }
 }

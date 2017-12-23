@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package >
+  <metadata>
+    <id>Huitian.SharpMap</id>
+    <version>$version$</version>
+    <title>$title$</title>
+    <authors>$author$</authors>
+    <owners>$author$</owners>
+    <licenseUrl>https://github.com/SharpMap/SharpMap</licenseUrl>
+    <projectUrl>https://github.com/SharpMap/SharpMap</projectUrl>
+    <iconUrl>http://f.hiphotos.baidu.com/baike/w%3D268%3Bg%3D0/sign=59f553fd00e9390156028a3843d733da/1f178a82b9014a90d32fad60a8773912b21beede.jpg</iconUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>$description$</description>
+    <copyright>Copyright 2016</copyright>
+    <tags>Huitian Huitian.SharpMap</tags>
+    <dependencies>
+      <dependency id="Common.Logging" version="3.3.1.0" />
+      <dependency id="Common.Logging.Core" version="3.3.1.0" />
+      <dependency id="GeoAPI" version="1.7.4.0" />
+      <dependency id="NetTopologySuite" version="1.14.0.0" />
+      <dependency id="Huitian.PowerCollections" version="1.0.0.0" />
+    </dependencies>
+  </metadata>
+</package>

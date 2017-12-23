@@ -55,7 +55,7 @@ public partial class Bins : Page
     /// </summary>
     /// <param name="row"></param>
     /// <returns></returns>
-    private VectorStyle GetCountryStyle(GeoAPI.Features.IFeature row)
+    private VectorStyle GetCountryStyle(FeatureDataRow row)
     {
         VectorStyle s = new VectorStyle();
         s.Fill = new SolidBrush(Color.Green);
@@ -73,7 +73,7 @@ public partial class Bins : Page
     ///	<para>Credits goes to gonzalo_ar for posting this in the forum</para></remarks>
     /// <param name="row"></param>
     /// <returns></returns>
-    private static Bitmap GetPieChart(GeoAPI.Features.IFeature row)
+    private static Bitmap GetPieChart(FeatureDataRow row)
     {
         // Replace polygon with a center point (this is where we place the symbol
         row.Geometry = row.Geometry.Centroid;

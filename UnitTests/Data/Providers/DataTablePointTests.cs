@@ -134,7 +134,7 @@ namespace UnitTests.Data.Providers
         }
 
         [Test]
-        public void GetGeometryByOidReturnsExpectedGeometry()
+        public void GetGeometryByIDReturnsExpectedGeometry()
         {
             DataTable source = CreateDataTableSource();
             DataTablePoint provider = new DataTablePoint(source, "oid", "x", "y");
@@ -142,7 +142,7 @@ namespace UnitTests.Data.Providers
             DataRow row = source.Select("oid = 43")[0];
             Point expected = new Point((double) row["x"], (double) row["y"]);
 
-            IGeometry actual = provider.GetGeometryByOid(43);
+            IGeometry actual = provider.GetGeometryByID(43);
 
             Assert.IsNotNull(actual);
             Assert.IsTrue(actual is Point);

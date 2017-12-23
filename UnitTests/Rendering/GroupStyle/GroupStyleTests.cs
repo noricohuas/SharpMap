@@ -1,5 +1,4 @@
-﻿using GeoAPI.Geometries;
-using NUnit.Framework;
+﻿using NUnit.Framework;
 using System.Drawing;
 using SharpMap.Layers;
 using SharpMap;
@@ -59,7 +58,7 @@ namespace UnitTests.Rendering.GroupStyle
              VectorLayer vLay = new VectorLayer("test");
              vLay.Style = style;
 
-             vLay.DataSource = new SharpMap.Data.Providers.FeatureProvider(GeoAPI.GeometryServiceProvider.Instance.CreateGeometryFactory(4326).CreatePoint(new Coordinate(0, 0)));
+             vLay.DataSource = new SharpMap.Data.Providers.GeometryProvider("POINT(0 0)");
 
              Map m = new Map(new Size(11, 11));
              m.BackColor = Color.White;

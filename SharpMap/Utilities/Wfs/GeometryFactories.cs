@@ -6,8 +6,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Xml;
-using GeoAPI.Features;
 using SharpMap.Data;
 using GeoAPI.Geometries;
 
@@ -22,9 +22,10 @@ namespace SharpMap.Utilities.Wfs
         #region Fields
 
         protected const string _GMLNS = "http://www.opengis.net/gml";
-        private readonly NumberFormatInfo _FormatInfo = new NumberFormatInfo();
-        private readonly HttpClientUtil _HttpClientUtil;
-        private readonly List<IPathNode> _PathNodes = new List<IPathNode>();
+        private readonly NumberFormatInfo _formatInfo = new NumberFormatInfo();
+        private readonly HttpClientUtil _httpClientUtil;
+        private readonly List<IPathNode> _pathNodes = new List<IPathNode>();
+        private int[] _axisOrder;
         protected AlternativePathNodesCollection _CoordinatesNode;
         private string _Cs;
         protected IPathNode _FeatureNode;
@@ -34,12 +35,11 @@ namespace SharpMap.Utilities.Wfs
 
         protected Collection<IGeometry> _Geoms = new Collection<IGeometry>();
 
-        protected IFeatureCollection _LabelInfo;
+        protected FeatureDataTable _LabelInfo;
         protected IPathNode _LabelNode;
         protected AlternativePathNodesCollection _ServiceExceptionNode;
         private string _Ts;
         protected XmlReader _XmlReader;
-
         #endregion
 
         #region Constructors
@@ -51,11 +51,11 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="featureTypeInfo">A <see cref="WfsFeatureTypeInfo"/> instance providing metadata of the featuretype to query</param>
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
         protected GeometryFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo,
-                                  IFeatureCollection labelInfo)
+                                  FeatureDataTable labelInfo)
         {
             _FeatureTypeInfo = featureTypeInfo;
             Factory = featureTypeInfo.Factory;
-            _HttpClientUtil = httpClientUtil;
+            _httpClientUtil = httpClientUtil;
             createReader(httpClientUtil);
 
             try
@@ -63,8 +63,12 @@ namespace SharpMap.Utilities.Wfs
                 if (labelInfo != null)
                 {
                     _LabelInfo = labelInfo;
-                    _LabelNode = new PathNode(_FeatureTypeInfo.FeatureTypeNamespace, _LabelInfo.AttributesDefinition[0].AttributeName,
-                                              (NameTable) _XmlReader.NameTable);
+                    var pathNodes = new IPathNode[labelInfo.Columns.Count];
+                    for (var i = 0; i < pathNodes.Length; i++)
+                    {
+                        pathNodes[i] = new PathNode(_FeatureTypeInfo.FeatureTypeNamespace, _LabelInfo.Columns[i].ColumnName, (NameTable)_XmlReader.NameTable);
+                    }
+                    _LabelNode = new AlternativePathNodesCollection(pathNodes);
                 }
             }
             catch (Exception ex)
@@ -93,7 +97,16 @@ namespace SharpMap.Utilities.Wfs
 
         #endregion
 
-        public IGeometryFactory Factory { get; set; }
+        internal IGeometryFactory Factory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the axis order
+        /// </summary>
+        internal int[] AxisOrder
+        {
+            get { return _axisOrder; }
+            set { _axisOrder = value; }
+        }
 
         #region Internal Member
 
@@ -174,7 +187,7 @@ namespace SharpMap.Utilities.Wfs
         #region Protected Member
 
         /// <summary>
-        /// This method parses a coordinates or posList(from 'GetFeatureByOid' response). 
+        /// This method parses a coordinates or posList(from 'GetFeature' response). 
         /// </summary>
         /// <param name="reader">An XmlReader instance at the position of the coordinates to read</param>
         /// <returns>A point collection (the collected coordinates)</returns>
@@ -185,25 +198,38 @@ namespace SharpMap.Utilities.Wfs
             string name = reader.LocalName;
             string coordinateString = reader.ReadElementString();
             var vertices = new List<Coordinate>();
-            string[] coordinateValues;
+            string[][] coordinateValues;
             int i = 0, length = 0;
 
             if (name.Equals("coordinates"))
-                coordinateValues = coordinateString.Split(_Cs[0], _Ts[0]);
+            {
+                var coords = coordinateString.Split(_Ts[0]);
+                coordinateValues = coords.Select(s => s.Split(_Cs[0])).ToArray();
+            }
             else
-                coordinateValues = coordinateString.Split(' ');
-
+            {
+                // we assume there are only x,y pairs
+                var coords = coordinateString.Split(' ');
+                var odds = coords.Where((s, idx) => idx%2 == 0);
+                var evens = coords.Where((s, idx) => idx%2 != 0);
+                coordinateValues = (from o in odds
+                    from e in evens
+                    select new [] {o, e}).ToArray();
+            }
             length = coordinateValues.Length;
 
-            while (i < length - 1)
+            while (i < length)
             {
-                double c1 = Convert.ToDouble(coordinateValues[i++], _FormatInfo);
-                double c2 = Convert.ToDouble(coordinateValues[i++], _FormatInfo);
+                var c = new double[2];
+                var values = coordinateValues[i++];
+                c[_axisOrder[0]] = Convert.ToDouble(values[0], _formatInfo);
+                c[_axisOrder[1]] = Convert.ToDouble(values[1], _formatInfo);
 
-                if (name.Equals("coordinates") || name.Equals("pos"))
-                    vertices.Add(new Coordinate(c1, c2));
-                else
-                    vertices.Add(new Coordinate(c2, c1));
+                var coordinate = values.Length > 2
+                    ? new Coordinate(c[0], c[1], Convert.ToDouble(values[2]))
+                    : new Coordinate(c[0], c[1]);
+                    
+                vertices.Add(coordinate);
             }
 
             return vertices.ToArray();
@@ -213,14 +239,14 @@ namespace SharpMap.Utilities.Wfs
         /// This method retrieves an XmlReader within a specified context.
         /// </summary>
         /// <param name="reader">An XmlReader instance that is the origin of a created sub-reader</param>
-        /// <param name="labelValue">A string array for recording a found label value. Pass 'null' to ignore searching for label values</param>
+        /// <param name="labels">A dictionary for recording label values. Pass 'null' to ignore searching for label values</param>
         /// <param name="pathNodes">A list of <see cref="IPathNode"/> instances defining the context of the retrieved reader</param>
         /// <returns>A sub-reader of the XmlReader given as argument</returns>
-        protected XmlReader GetSubReaderOf(XmlReader reader, string[] labelValue, params IPathNode[] pathNodes)
+        protected XmlReader GetSubReaderOf(XmlReader reader, Dictionary<string, string> labels, params IPathNode[] pathNodes)
         {
-            _PathNodes.Clear();
-            _PathNodes.AddRange(pathNodes);
-            return GetSubReaderOf(reader, labelValue, _PathNodes);
+            _pathNodes.Clear();
+            _pathNodes.AddRange(pathNodes);
+            return GetSubReaderOf(reader, labels, _pathNodes);
         }
 
         /// <summary>
@@ -228,10 +254,10 @@ namespace SharpMap.Utilities.Wfs
         /// Moreover it collects label values before or after a geometry could be found.
         /// </summary>
         /// <param name="reader">An XmlReader instance that is the origin of a created sub-reader</param>
-        /// <param name="labelValue">A string array for recording a found label value. Pass 'null' to ignore searching for label values</param>
+        /// <param name="labels">A dictionary for recording label values. Pass 'null' to ignore searching for label values</param>
         /// <param name="pathNodes">A list of <see cref="IPathNode"/> instances defining the context of the retrieved reader</param>
         /// <returns>A sub-reader of the XmlReader given as argument</returns>
-        protected XmlReader GetSubReaderOf(XmlReader reader, string[] labelValue, List<IPathNode> pathNodes)
+        protected XmlReader GetSubReaderOf(XmlReader reader, Dictionary<string, string> labels, List<IPathNode> pathNodes)
         {
             string errorMessage = null;
 
@@ -249,10 +275,19 @@ namespace SharpMap.Utilities.Wfs
                         return reader.ReadSubtree();
                     }
 
-                    if (labelValue != null)
+                    if (labels != null)
                         if (_LabelNode != null)
                             if (_LabelNode.Matches(reader))
-                                labelValue[0] = reader.ReadElementString();
+                            {
+                                var labelName = reader.Name;
+                                var labelValue = reader.ReadString();
+
+                                // remove the namespace
+                                if (labelName.Contains(":"))
+                                    labelName = labelName.Split(':')[1];
+
+                                labels.Add(labelName, labelValue);
+                            }
 
 
                     if (_ServiceExceptionNode.Matches(reader))
@@ -267,26 +302,28 @@ namespace SharpMap.Utilities.Wfs
             return null;
         }
 
-        private IFeatureFactory _featureFactory;
         /// <summary>
-        /// This method adds a label to the collection.
+        /// This method adds labels to the collection.
         /// </summary>
-        protected void AddLabel(string labelValue, IGeometry geom)
+        protected void AddLabel(Dictionary<string, string> labelValues, IGeometry geom)
         {
-            if (_LabelInfo == null || geom == null || string.IsNullOrEmpty(labelValue)) return;
+            if (_LabelInfo == null || geom == null || labelValues == null) return;
 
             try
             {
-                var f = _featureFactory.Create(geom);
-                f.Attributes[1] = labelValue;
-                _LabelInfo.Add(f);
+                FeatureDataRow row = _LabelInfo.NewRow();
+                foreach (var keyPair in labelValues)
+                {
+                    var labelName = keyPair.Key;
+                    var labelValue = keyPair.Value;
+
+                    row[labelName] = labelValue;
+                }
                 
-                /*
-                var row = _LabelInfo.NewRow();
-                row[0] = labelValue;
                 row.Geometry = geom;
                 _LabelInfo.AddRow(row);
-                 */
+
+                labelValues.Clear();
             }
             catch (Exception ex)
             {
@@ -351,7 +388,7 @@ namespace SharpMap.Utilities.Wfs
             string decimalDel = string.IsNullOrEmpty(_FeatureTypeInfo.DecimalDel) ? ":" : _FeatureTypeInfo.DecimalDel;
             _Cs = string.IsNullOrEmpty(_FeatureTypeInfo.Cs) ? "," : _FeatureTypeInfo.Cs;
             _Ts = string.IsNullOrEmpty(_FeatureTypeInfo.Ts) ? " " : _FeatureTypeInfo.Ts;
-            _FormatInfo.NumberDecimalSeparator = decimalDel;
+            _formatInfo.NumberDecimalSeparator = decimalDel;
         }
 
         #endregion
@@ -365,8 +402,8 @@ namespace SharpMap.Utilities.Wfs
         {
             if (_XmlReader != null)
                 _XmlReader.Close();
-            if (_HttpClientUtil != null)
-                _HttpClientUtil.Close();
+            if (_httpClientUtil != null)
+                _httpClientUtil.Close();
         }
 
         #endregion
@@ -386,8 +423,8 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="httpClientUtil">A configured <see cref="HttpClientUtil"/> instance for performing web requests</param>
         /// <param name="featureTypeInfo">A <see cref="WfsFeatureTypeInfo"/> instance providing metadata of the featuretype to query</param>
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
-        internal PointFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo,
-                              IFeatureCollection labelInfo) : base(httpClientUtil, featureTypeInfo, labelInfo)
+        internal PointFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo, FeatureDataTable labelInfo) 
+            : base(httpClientUtil, featureTypeInfo, labelInfo)
         {
         }
 
@@ -414,7 +451,7 @@ namespace SharpMap.Utilities.Wfs
         internal override Collection<IGeometry> createGeometries()
         {
             IPathNode pointNode = new PathNode(_GMLNS, "Point", (NameTable) _XmlReader.NameTable);
-            string[] labelValue = new string[1];
+            var labelValues = new Dictionary<string, string>();
             bool geomFound = false;
 
             try
@@ -422,13 +459,13 @@ namespace SharpMap.Utilities.Wfs
                 // Reading the entire feature's node makes it possible to collect label values that may appear before or after the geometry property
                 while ((_FeatureReader = GetSubReaderOf(_XmlReader, null, _FeatureNode)) != null)
                 {
-                    while ((_GeomReader = GetSubReaderOf(_FeatureReader, labelValue, pointNode, _CoordinatesNode)) !=
+                    while ((_GeomReader = GetSubReaderOf(_FeatureReader, labelValues, pointNode, _CoordinatesNode)) !=
                            null)
                     {
                         _Geoms.Add(Factory.CreatePoint(ParseCoordinates(_GeomReader)[0]));
                         geomFound = true;
                     }
-                    if (geomFound) AddLabel(labelValue[0], _Geoms[_Geoms.Count - 1]);
+                    if (geomFound) AddLabel(labelValues, _Geoms[_Geoms.Count - 1]);
                     geomFound = false;
                 }
             }
@@ -458,8 +495,7 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="httpClientUtil">A configured <see cref="HttpClientUtil"/> instance for performing web requests</param>
         /// <param name="featureTypeInfo">A <see cref="WfsFeatureTypeInfo"/> instance providing metadata of the featuretype to query</param>
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
-        internal LineStringFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo,
-                                   IFeatureCollection labelInfo)
+        internal LineStringFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo, FeatureDataTable labelInfo)
             : base(httpClientUtil, featureTypeInfo, labelInfo)
         {
         }
@@ -487,7 +523,7 @@ namespace SharpMap.Utilities.Wfs
         internal override Collection<IGeometry> createGeometries()
         {
             IPathNode lineStringNode = new PathNode(_GMLNS, "LineString", (NameTable) _XmlReader.NameTable);
-            string[] labelValue = new string[1];
+            var labelValues = new Dictionary<string, string>();
             bool geomFound = false;
 
             try
@@ -496,13 +532,13 @@ namespace SharpMap.Utilities.Wfs
                 while ((_FeatureReader = GetSubReaderOf(_XmlReader, null, _FeatureNode)) != null)
                 {
                     while (
-                        (_GeomReader = GetSubReaderOf(_FeatureReader, labelValue, lineStringNode, _CoordinatesNode)) !=
+                        (_GeomReader = GetSubReaderOf(_FeatureReader, labelValues, lineStringNode, _CoordinatesNode)) !=
                         null)
                     {
                         _Geoms.Add(Factory.CreateLineString(ParseCoordinates(_GeomReader)));
                         geomFound = true;
                     }
-                    if (geomFound) AddLabel(labelValue[0], _Geoms[_Geoms.Count - 1]);
+                    if (geomFound) AddLabel(labelValues, _Geoms[_Geoms.Count - 1]);
                     geomFound = false;
                 }
             }
@@ -532,8 +568,7 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="httpClientUtil">A configured <see cref="HttpClientUtil"/> instance for performing web requests</param>
         /// <param name="featureTypeInfo">A <see cref="WfsFeatureTypeInfo"/> instance providing metadata of the featuretype to query</param>
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
-        internal PolygonFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo,
-                                IFeatureCollection labelInfo)
+        internal PolygonFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo, FeatureDataTable labelInfo)
             : base(httpClientUtil, featureTypeInfo, labelInfo)
         {
         }
@@ -571,7 +606,7 @@ namespace SharpMap.Utilities.Wfs
             IPathNode interiorNode = new PathNode(_GMLNS, "interior", (NameTable) _XmlReader.NameTable);
             IPathNode innerBoundaryNodeAlt = new AlternativePathNodesCollection(innerBoundaryNode, interiorNode);
             IPathNode linearRingNode = new PathNode(_GMLNS, "LinearRing", (NameTable) _XmlReader.NameTable);
-            string[] labelValue = new string[1];
+            var labelValues = new Dictionary<string, string>();
             bool geomFound = false;
 
             try
@@ -581,7 +616,7 @@ namespace SharpMap.Utilities.Wfs
                 {
                     ILinearRing shell = null;
                     var holes = new List<ILinearRing>();
-                    while ((_GeomReader = GetSubReaderOf(_FeatureReader, labelValue, polygonNode)) != null)
+                    while ((_GeomReader = GetSubReaderOf(_FeatureReader, labelValues, polygonNode)) != null)
                     {
                         //polygon = new Polygon();
 
@@ -600,7 +635,7 @@ namespace SharpMap.Utilities.Wfs
                         _Geoms.Add(Factory.CreatePolygon(shell, holes.ToArray()));
                         geomFound = true;
                     }
-                    if (geomFound) AddLabel(labelValue[0], _Geoms[_Geoms.Count - 1]);
+                    if (geomFound) AddLabel(labelValues, _Geoms[_Geoms.Count - 1]);
                     geomFound = false;
                 }
             }
@@ -630,8 +665,7 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="httpClientUtil">A configured <see cref="HttpClientUtil"/> instance for performing web requests</param>
         /// <param name="featureTypeInfo">A <see cref="WfsFeatureTypeInfo"/> instance providing metadata of the featuretype to query</param>
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
-        internal MultiPointFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo,
-                                   IFeatureCollection labelInfo)
+        internal MultiPointFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo, FeatureDataTable labelInfo) 
             : base(httpClientUtil, featureTypeInfo, labelInfo)
         {
         }
@@ -658,7 +692,7 @@ namespace SharpMap.Utilities.Wfs
         {
             IPathNode multiPointNode = new PathNode(_GMLNS, "MultiPoint", (NameTable) _XmlReader.NameTable);
             IPathNode pointMemberNode = new PathNode(_GMLNS, "pointMember", (NameTable) _XmlReader.NameTable);
-            string[] labelValue = new string[1];
+            var labelValues = new Dictionary<string, string>();
             bool geomFound = false;
 
             try
@@ -667,10 +701,10 @@ namespace SharpMap.Utilities.Wfs
                 while ((_FeatureReader = GetSubReaderOf(_XmlReader, null, _FeatureNode)) != null)
                 {
                     while (
-                        (_GeomReader = GetSubReaderOf(_FeatureReader, labelValue, multiPointNode, pointMemberNode)) !=
+                        (_GeomReader = GetSubReaderOf(_FeatureReader, labelValues, multiPointNode, pointMemberNode)) !=
                         null)
                     {
-                        GeometryFactory geomFactory = new PointFactory(_GeomReader, _FeatureTypeInfo);
+                        GeometryFactory geomFactory = new PointFactory(_GeomReader, _FeatureTypeInfo) { AxisOrder = AxisOrder};
                         var points = geomFactory.createGeometries();
 
                         var pointArray = new IPoint[points.Count];
@@ -681,7 +715,7 @@ namespace SharpMap.Utilities.Wfs
                         _Geoms.Add(Factory.CreateMultiPoint(pointArray));
                         geomFound = true;
                     }
-                    if (geomFound) AddLabel(labelValue[0], _Geoms[_Geoms.Count - 1]);
+                    if (geomFound) AddLabel(labelValues, _Geoms[_Geoms.Count - 1]);
                     geomFound = false;
                 }
             }
@@ -712,7 +746,7 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="featureTypeInfo">A <see cref="WfsFeatureTypeInfo"/> instance providing metadata of the featuretype to query</param>
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
         internal MultiLineStringFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo,
-                                        IFeatureCollection labelInfo)
+                                        FeatureDataTable labelInfo) 
             : base(httpClientUtil, featureTypeInfo, labelInfo)
         {
         }
@@ -743,7 +777,7 @@ namespace SharpMap.Utilities.Wfs
             IPathNode lineStringMemberNode = new PathNode(_GMLNS, "lineStringMember", (NameTable) _XmlReader.NameTable);
             IPathNode curveMemberNode = new PathNode(_GMLNS, "curveMember", (NameTable) _XmlReader.NameTable);
             IPathNode lineStringMemberNodeAlt = new AlternativePathNodesCollection(lineStringMemberNode, curveMemberNode);
-            string[] labelValue = new string[1];
+            var labelValues = new Dictionary<string, string>();
             bool geomFound = false;
 
             try
@@ -753,10 +787,10 @@ namespace SharpMap.Utilities.Wfs
                 {
                     while (
                         (_GeomReader =
-                         GetSubReaderOf(_FeatureReader, labelValue, multiLineStringNodeAlt, lineStringMemberNodeAlt)) !=
+                         GetSubReaderOf(_FeatureReader, labelValues, multiLineStringNodeAlt, lineStringMemberNodeAlt)) !=
                         null)
                     {
-                        GeometryFactory geomFactory = new LineStringFactory(_GeomReader, _FeatureTypeInfo);
+                        GeometryFactory geomFactory = new LineStringFactory(_GeomReader, _FeatureTypeInfo) { AxisOrder = AxisOrder };
                         Collection<IGeometry> lineStrings = geomFactory.createGeometries();
 
                         var lineStringArray = new ILineString[lineStrings.Count];
@@ -767,7 +801,7 @@ namespace SharpMap.Utilities.Wfs
                         _Geoms.Add(Factory.CreateMultiLineString(lineStringArray));
                         geomFound = true;
                     }
-                    if (geomFound) AddLabel(labelValue[0], _Geoms[_Geoms.Count - 1]);
+                    if (geomFound) AddLabel(labelValues, _Geoms[_Geoms.Count - 1]);
                     geomFound = false;
                 }
             }
@@ -797,8 +831,7 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="httpClientUtil">A configured <see cref="HttpClientUtil"/> instance for performing web requests</param>
         /// <param name="featureTypeInfo">A <see cref="WfsFeatureTypeInfo"/> instance providing metadata of the featuretype to query</param>
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
-        internal MultiPolygonFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo,
-                                     IFeatureCollection labelInfo)
+        internal MultiPolygonFactory(HttpClientUtil httpClientUtil, WfsFeatureTypeInfo featureTypeInfo, FeatureDataTable labelInfo) 
             : base(httpClientUtil, featureTypeInfo, labelInfo)
         {
         }
@@ -832,7 +865,7 @@ namespace SharpMap.Utilities.Wfs
             IPathNode surfaceMemberNode = new PathNode(_GMLNS, "surfaceMember", (NameTable) _XmlReader.NameTable);
             IPathNode polygonMemberNodeAlt = new AlternativePathNodesCollection(polygonMemberNode, surfaceMemberNode);
             IPathNode linearRingNode = new PathNode(_GMLNS, "LinearRing", (NameTable) _XmlReader.NameTable);
-            string[] labelValue = new string[1];
+            var labelValues = new Dictionary<string, string>();
             bool geomFound = false;
 
             try
@@ -842,20 +875,32 @@ namespace SharpMap.Utilities.Wfs
                 {
                     while (
                         (_GeomReader =
-                         GetSubReaderOf(_FeatureReader, labelValue, multiPolygonNodeAlt, polygonMemberNodeAlt)) != null)
+                         GetSubReaderOf(_FeatureReader, labelValues, multiPolygonNodeAlt)) != null)
                     {
-                        GeometryFactory geomFactory = new PolygonFactory(_GeomReader, _FeatureTypeInfo);
-                        var polygons = geomFactory.createGeometries();
+                        XmlReader memberReader;
+                        var polygons = new List<IGeometry>();
+                        while ((memberReader = GetSubReaderOf(_GeomReader, labelValues, polygonMemberNodeAlt)) != null)
+                        {
+                            GeometryFactory geomFactory = new PolygonFactory(memberReader, _FeatureTypeInfo) { AxisOrder = AxisOrder };
+                            var polygon = geomFactory.createGeometries()[0]; // polygon element has a maxOccurs=1
+                            
+                            polygons.Add(polygon);
 
-                        var polygonArray = new IPolygon[polygons.Count];
-                        var i = 0;
-                        foreach (IPolygon polygon in polygons)
-                            polygonArray[i++] = polygon;
+                            geomFound = true;
+                        }
 
-                        _Geoms.Add(Factory.CreateMultiPolygon(polygonArray));
-                        geomFound = true;
+                        if (geomFound)
+                        {
+                            var polygonArray = new IPolygon[polygons.Count];
+                            var i = 0;
+                            foreach (IPolygon polygon in polygons)
+                                polygonArray[i++] = polygon;
+
+                            _Geoms.Add(Factory.CreateMultiPolygon(polygonArray));
+                        }
+                        
                     }
-                    if (geomFound) AddLabel(labelValue[0], _Geoms[_Geoms.Count - 1]);
+                    if (geomFound) AddLabel(labelValues, _Geoms[_Geoms.Count - 1]);
                     geomFound = false;
                 }
             }
@@ -898,7 +943,7 @@ namespace SharpMap.Utilities.Wfs
         /// <param name="labelInfo">A FeatureDataTable for labels</param>
         internal UnspecifiedGeometryFactory_WFS1_0_0_GML2(HttpClientUtil httpClientUtil,
                                                           WfsFeatureTypeInfo featureTypeInfo, bool multiGeometries,
-                                                          bool quickGeometries, IFeatureCollection labelInfo)
+                                                          bool quickGeometries, FeatureDataTable labelInfo)
             : base(httpClientUtil, featureTypeInfo, labelInfo)
         {
             _HttpClientUtil = httpClientUtil;
@@ -911,7 +956,7 @@ namespace SharpMap.Utilities.Wfs
         #region Internal Member
 
         /// <summary>
-        /// This method detects the geometry type from 'GetFeatureByOid' response and uses a geometry factory to create the 
+        /// This method detects the geometry type from 'GetFeature' response and uses a geometry factory to create the 
         /// appropriate geometries.
         /// </summary>
         /// <returns></returns>
@@ -989,11 +1034,19 @@ namespace SharpMap.Utilities.Wfs
             }
 
             _FeatureTypeInfo.Geometry._GeometryType = geometryTypeString;
-
             if (geomFactory != null)
-                return _QuickGeometries
-                           ? geomFactory.createQuickGeometries(geometryTypeString)
-                           : geomFactory.createGeometries();
+            {
+                geomFactory.AxisOrder = AxisOrder;
+
+                var res = _QuickGeometries
+                    ? geomFactory.createQuickGeometries(geometryTypeString)
+                    : geomFactory.createGeometries();
+                
+                geomFactory.Dispose();
+                return res;
+            }
+
+
             return _Geoms;
         }
 

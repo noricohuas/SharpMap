@@ -20,8 +20,6 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Data.Common;
 using System.Globalization;
-using System.Threading;
-using GeoAPI.Features;
 using GeoAPI.Geometries;
 using NetTopologySuite.IO;
 using Common.Logging;
@@ -36,7 +34,7 @@ namespace SharpMap.Data.Providers
     /// </para>
     /// </summary>
     [Serializable]
-    public class ManagedSpatiaLite : PreparedGeometryProvider
+    public class ManagedSpatiaLite : BaseProvider
     {
         static readonly ILog Logger = LogManager.GetLogger(typeof(ManagedSpatiaLite));
 
@@ -300,7 +298,7 @@ namespace SharpMap.Data.Providers
             }
         }
 
-        public override IEnumerable<IGeometry> GetGeometriesInView(Envelope bbox, CancellationToken? cancellationToken = null)
+        public override Collection<IGeometry> GetGeometriesInView(Envelope bbox)
         {
             var features = new Collection<IGeometry>();
             using (var conn = GetConnection(ConnectionString))
@@ -348,9 +346,9 @@ namespace SharpMap.Data.Providers
             return cn;
         }
 
-        public override IEnumerable<object> GetOidsInView(Envelope bbox, CancellationToken? cancellationToken = null)
+        public override Collection<uint> GetObjectIDsInView(Envelope bbox)
         {
-            //var objectlist = new Collection<uint>();
+            var objectlist = new Collection<uint>();
             using (var conn = GetConnection(ConnectionString))
             {
                 string strSql = "SELECT \"" + ObjectIdColumn + "\" ";
@@ -390,26 +388,27 @@ namespace SharpMap.Data.Providers
                                     continue;
                             }
 
-                            yield return dr[0];
+                            var id = Convert.ToUInt32(dr[0]);
+                            objectlist.Add(id);
                         }
                         dr.Close();
                     }
                     conn.Close();
                 }
             }
+            return objectlist;
         }
 
-        public override IGeometry GetGeometryByOid(object oid)
+        public override IGeometry GetGeometryByID(uint oid)
         {
             IGeometry geom = null;
             var reader = new GaiaGeoReader(Factory.CoordinateSequenceFactory, Factory.PrecisionModel, _ordinates);
             using (var conn = GetConnection(ConnectionString))
             {
                 string strSql = "SELECT \"" + GeometryColumn + "\" AS Geom FROM \"" + Table + "\" WHERE \"" +
-                                ObjectIdColumn + "\" = @POid;";
+                                ObjectIdColumn + "\" = " + oid;
                 using (var command = new SQLiteCommand(strSql, conn))
                 {
-                    command.Parameters.Add(new SQLiteParameter("POid", oid));
                     using (var dr = command.ExecuteReader())
                     {
                         while (dr.Read())
@@ -425,6 +424,63 @@ namespace SharpMap.Data.Providers
                 conn.Close();
             }
             return geom;
+        }
+
+        protected override void OnExecuteIntersectionQuery(IGeometry geom, FeatureDataSet ds)
+        {
+            var prepGeom = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(geom);
+            GetNonSpatialColumns();
+
+            using (var conn = GetConnection(ConnectionString))
+            {
+                var strSql = "SELECT " + _columns + ", \"" + GeometryColumn + "\" AS \"_smtmp_\" ";
+                strSql += "FROM " + Table + " WHERE ";
+
+                // Attribute constraint
+                if (!String.IsNullOrEmpty(_definitionQuery))
+                    strSql += DefinitionQuery + " AND ";
+
+                // Spatial constraint
+                strSql += GetBoxClause(geom.EnvelopeInternal);
+
+                using (var cmd = new SQLiteCommand(strSql, conn))
+                {
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        var geomIndex = reader.FieldCount - 1;
+                        var fdt = CreateTableFromReader(reader, geomIndex);
+
+                        var dataTransfer = new object[geomIndex];
+                        var geoReader = new GaiaGeoReader(Factory.CoordinateSequenceFactory, Factory.PrecisionModel,
+                                                          _ordinates);
+                        fdt.BeginLoadData();
+                        while (reader.Read())
+                        {
+                            IGeometry g = null;
+                            if (!reader.IsDBNull(geomIndex))
+                                g = geoReader.Read((byte[]) reader.GetValue(geomIndex));
+
+                            //No geometry, no feature!
+                            if (g == null)
+                                continue;
+
+                            //If not intersecting
+                            if (!prepGeom.Intersects(g))
+                                continue;
+
+                            //Get all the attribute data
+                            var count = reader.GetValues(dataTransfer);
+                            System.Diagnostics.Debug.Assert(count == dataTransfer.Length);
+                            
+                            var fdr = (FeatureDataRow) fdt.LoadDataRow(dataTransfer, true);
+                            fdr.Geometry = g;
+                        }
+                        reader.Close();
+                        fdt.EndLoadData();
+                        ds.Tables.Add(fdt);
+                    }
+                }
+            }
         }
 
         private FeatureDataTable CreateTableFromReader(DbDataReader reader, int geomIndex)
@@ -452,7 +508,7 @@ namespace SharpMap.Data.Providers
             return item;
         }
 
-        public override void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet fcs, CancellationToken? cancellationToken = null)
+        public override void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
         {
             GetNonSpatialColumns();
             using (var conn = GetConnection(ConnectionString))
@@ -501,7 +557,7 @@ namespace SharpMap.Data.Providers
                         }
                         reader.Close();
                         fdt.EndLoadData();
-                        fcs.Add(fdt);
+                        ds.Tables.Add(fdt);
                     }
                 }
             }
@@ -541,7 +597,7 @@ namespace SharpMap.Data.Providers
             return count;
         }
 
-        public override IFeature GetFeatureByOid(object rowId)
+        public override FeatureDataRow GetFeature(uint rowId)
         {
             GetNonSpatialColumns();
             using (var conn = GetConnection(ConnectionString))

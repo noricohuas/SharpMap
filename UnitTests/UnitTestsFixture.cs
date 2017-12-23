@@ -1,30 +1,36 @@
-﻿using System;
-using System.Diagnostics;
-using GeoAPI;
-using NUnit.Framework;
-
-namespace UnitTests
+﻿namespace UnitTests
 {
-    [SetUpFixture]
+    [NUnit.Framework.SetUpFixture]
     public class UnitTestsFixture
     {
-        private Stopwatch _stopWatch;
+        private System.Diagnostics.Stopwatch _stopWatch;
 
-        [SetUp]
+        [NUnit.Framework.SetUp]
         public void RunBeforeAnyTests()
         {
-            GeometryServiceProvider.Instance = NetTopologySuite.NtsGeometryServices.Instance;
-            
-            _stopWatch = new Stopwatch();
-            Console.WriteLine("Starting tests");
+            var gss = new NetTopologySuite.NtsGeometryServices();
+            var css = new SharpMap.CoordinateSystems.CoordinateSystemServices(
+                new ProjNet.CoordinateSystems.CoordinateSystemFactory(System.Text.Encoding.ASCII),
+                new ProjNet.CoordinateSystems.Transformations.CoordinateTransformationFactory(),
+                SharpMap.Converters.WellKnownText.SpatialReference.GetAllReferenceSystems());
+
+            GeoAPI.GeometryServiceProvider.Instance = gss;
+            SharpMap.Session.Instance
+                .SetGeometryServices(gss)
+                .SetCoordinateSystemServices(css)
+                .SetCoordinateSystemRepository(css);
+
+            _stopWatch = new System.Diagnostics.Stopwatch();
+            System.Diagnostics.Trace.WriteLine("Starting tests");
             _stopWatch.Start();
         }
 
-        [TearDown]
+        [NUnit.Framework.TearDown]
         public void RunAfterAllTests()
         {
             _stopWatch.Stop();
-            Console.WriteLine("All tests accomplished in {0}ms", _stopWatch.ElapsedMilliseconds);
+            System.Diagnostics.Trace.WriteLine(
+                string.Format("All tests accomplished in {0}ms", _stopWatch.ElapsedMilliseconds));
         }
     }
 }

@@ -18,7 +18,6 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using GeoAPI.Features;
 using SharpMap.Data;
 using SharpMap.Styles;
 
@@ -130,6 +129,7 @@ namespace SharpMap.Rendering.Thematics
             float fFrac = Convert.ToSingle(dFrac);
             style.Enabled = (dFrac > 0.5 ? min.Enabled : max.Enabled);
             style.EnableOutline = (dFrac > 0.5 ? min.EnableOutline : max.EnableOutline);
+            style.VisibilityUnits = min.VisibilityUnits;
             if (_fillColorBlend != null)
                 style.Fill = new SolidBrush(_fillColorBlend.GetColor(fFrac));
             else if (min.Fill != null && max.Fill != null)
@@ -175,6 +175,7 @@ namespace SharpMap.Rendering.Thematics
             if (min.Halo != null && max.Halo != null)
                 style.Halo = InterpolatePen(min.Halo, max.Halo, value);
 
+            style.VisibilityUnits = min.VisibilityUnits;
             style.MinVisible = InterpolateDouble(min.MinVisible, max.MinVisible, value);
             style.MaxVisible = InterpolateDouble(min.MaxVisible, max.MaxVisible, value);
             style.Offset = new PointF(InterpolateFloat(min.Offset.X, max.Offset.X, value),
@@ -309,14 +310,14 @@ namespace SharpMap.Rendering.Thematics
         /// Returns the style based on a numeric DataColumn, where style
         /// properties are linearly interpolated between max and min values.
         /// </summary>
-        /// <param name="feature">Feature</param>
+        /// <param name="row">Feature</param>
         /// <returns><see cref="SharpMap.Styles.IStyle">Style</see> calculated by a linear interpolation between the min/max styles</returns>
-        public virtual IStyle GetStyle(IFeature feature)
+        public virtual IStyle GetStyle(FeatureDataRow row)
         {
             double attr;
             try
             {
-                attr = GetAttributeValue(feature);
+                attr = GetAttributeValue(row);
             }
             catch
             {
@@ -342,14 +343,14 @@ namespace SharpMap.Rendering.Thematics
         /// </summary>
         /// <param name="row">The row</param>
         /// <returns>A <see cref="double"/> value</returns>
-        protected abstract double GetAttributeValue(IFeature row);
+        protected abstract double GetAttributeValue(FeatureDataRow row);
     }
 
     /// <summary>
     /// The GradientTheme class defines a gradient color thematic rendering of features based by a numeric attribute.
     /// </summary>
     [Serializable]
-    public class GradientTheme : GradientThemeBase
+    public class GradientTheme : GradientThemeBase, ICloneable
     {
         private string _columnName;
 
@@ -417,9 +418,20 @@ namespace SharpMap.Rendering.Thematics
         /// </summary>
         /// <param name="row">The row</param>
         /// <returns>A <see cref="double"/> value</returns>
-        protected override double GetAttributeValue(IFeature row)
+        protected override double GetAttributeValue(FeatureDataRow row)
         {
-            return Convert.ToDouble(row.Attributes[_columnName]);
+            return Convert.ToDouble(row[_columnName]);
+        }
+
+        public object Clone()
+        {
+            var res = (GradientTheme) MemberwiseClone();
+            if (res.MinStyle is ICloneable)
+                res.MinStyle = (IStyle) ((ICloneable) MinStyle).Clone();
+            if (res.MaxStyle is ICloneable)
+                res.MaxStyle = (IStyle) ((ICloneable) MaxStyle).Clone();
+
+            return res;
         }
     }
 }

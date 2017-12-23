@@ -1,5 +1,4 @@
-﻿using System.Linq;
-using GeoAPI.Geometries;
+﻿using GeoAPI.Geometries;
 using NUnit.Framework;
 using SharpMap.Data;
 using SharpMap.Data.Providers;
@@ -44,7 +43,7 @@ namespace UnitTests.Data.Providers
         private OleDbPoint CreateProvider()
         {
             var p = new OleDbPoint(
-                "Provider=Microsoft.Jet.OLEDB.4.0;Data Source=\"" + System.IO.Path.GetTempPath() + "\";" +
+                "Provider=" + Properties.Settings.Default.OleDbProvider + ";Data Source=\"" + System.IO.Path.GetTempPath() + "\";" +
                 "Extended Properties=\"text;HDR=Yes;FMT=Delimited\"", _tableName, "ID", "X", "Y");
 
             return p;
@@ -82,22 +81,22 @@ namespace UnitTests.Data.Providers
         {
             using (var p = CreateProvider())
             {
-                GeoAPI.Features.IFeature  feature = null;
-                Assert.DoesNotThrow(() => feature = p.GetFeatureByOid(3));
+                FeatureDataRow feature = null;
+                Assert.DoesNotThrow(() => feature = p.GetFeature(3));
                 Assert.IsNotNull(feature);
-                Assert.AreEqual(3, (int)feature.Attributes[p.ObjectIdColumn]);
+                Assert.AreEqual(3, (int)feature[p.ObjectIdColumn]);
                 Assert.AreEqual(feature.Geometry.Centroid.Coordinate,
                     new Coordinate(429003.31, 360425.45));
             }
         }
 
         [Test]
-        public void TestGetGeometryByOid()
+        public void TestGetGeometryById()
         {
             using (var p = CreateProvider())
             {
                 IGeometry feature = null;
-                Assert.DoesNotThrow(() => feature = p.GetGeometryByOid(3));
+                Assert.DoesNotThrow(() => feature = p.GetGeometryByID(3));
                 Assert.IsNotNull(feature);
                 Assert.AreEqual(feature.Centroid.Coordinate,
                     new Coordinate(429003.31, 360425.45));
@@ -131,11 +130,11 @@ namespace UnitTests.Data.Providers
                 Assert.AreEqual(_tableName, table.TableName);
                 Assert.AreEqual(4, table.Rows.Count);
 
-                var oids = p.GetOidsInView(ext);
+                var oids = p.GetObjectIDsInView(ext);
 
-                Assert.AreEqual(table.Rows.Count, oids.Count());
+                Assert.AreEqual(table.Rows.Count, oids.Count);
                 foreach (FeatureDataRow row in table.Select())
-                    Assert.IsTrue(oids.Contains((object)row[0]));
+                    Assert.IsTrue(oids.Contains((uint)(int)row[0]));
             }
         }
 
@@ -154,7 +153,7 @@ namespace UnitTests.Data.Providers
 
                 var geoms = p.GetGeometriesInView(ext);
 
-                Assert.AreEqual(table.Rows.Count, geoms.Count());
+                Assert.AreEqual(table.Rows.Count, geoms.Count);
                 foreach (FeatureDataRow row in table.Select())
                     Assert.IsTrue(geoms.Contains(row.Geometry));
             }

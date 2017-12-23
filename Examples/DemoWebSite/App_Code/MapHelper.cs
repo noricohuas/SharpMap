@@ -18,6 +18,21 @@ using Point=GeoAPI.Geometries.Coordinate;
 /// </summary>
 public class MapHelper
 {
+    static MapHelper()
+    {
+
+        var gss = GeoAPI.GeometryServiceProvider.Instance;
+        var css = new SharpMap.CoordinateSystems.CoordinateSystemServices(
+            new ProjNet.CoordinateSystems.CoordinateSystemFactory(System.Text.Encoding.ASCII),
+            new ProjNet.CoordinateSystems.Transformations.CoordinateTransformationFactory(),
+            SharpMap.Converters.WellKnownText.SpatialReference.GetAllReferenceSystems());
+
+        GeoAPI.GeometryServiceProvider.Instance = gss;
+        SharpMap.Session.Instance
+            .SetGeometryServices(gss)
+            .SetCoordinateSystemServices(css)
+            .SetCoordinateSystemRepository(css);
+    }
     public static Map InitializeMap(Size size)
     {
 			HttpContext.Current.Trace.Write("Initializing map...");
@@ -483,10 +498,10 @@ public class MapHelper
         layCityLabel.Enabled = true;
         layCityLabel.LabelColumn = "name";
         layCityLabel.PriorityColumn = "population";
-        layCityLabel.PriorityDelegate = delegate(GeoAPI.Features.IFeature fdr)
+        layCityLabel.PriorityDelegate = delegate(SharpMap.Data.FeatureDataRow fdr)
         {
-            Int32 retVal = 10000000 * (Int32)((String)fdr.Attributes["capital"] == "Y" ? 1 : 0);
-            return retVal + Convert.ToInt32(fdr.Attributes["population"]);
+            Int32 retVal = 10000000 * (Int32)((String)fdr["capital"] == "Y" ? 1 : 0);
+            return retVal + Convert.ToInt32(fdr["population"]);
         };
         layCityLabel.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
         layCityLabel.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;

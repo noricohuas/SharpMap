@@ -1,17 +1,18 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Web.Mvc;
-using SharpMap.Demo.Wms.Models;
-
-namespace SharpMap.Demo.Wms.Controllers
+﻿namespace SharpMap.Demo.Wms.Controllers
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Reflection;
+    using System.Web.Mvc;
+
+    using SharpMap.Demo.Wms.Models;
+
     public class HomeController : Controller
     {
         private List<DemoItem> GetDemoItems()
         {
             List<DemoItem> items = new List<DemoItem>();
-            Type type = GetType();
+            Type type = this.GetType();
 
             // how to retrieve all public instance methods? 
             // BindingFlags.Public | BindingFlags.DeclaredOnly returns an empty array...
@@ -36,68 +37,63 @@ namespace SharpMap.Demo.Wms.Controllers
         [Obsolete]
         public ActionResult Index()
         {
-            ViewData["DemoItems"] = GetDemoItems();
-            return View();
+            this.ViewData["DemoItems"] = this.GetDemoItems();
+            return this.View();
         }
 
         public ActionResult Default()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult Openlayers()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult Polymaps()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult Leaflet()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult Geojson()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult Editor()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult Offline()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult TileCanvas()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult Buildings()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult UtfGrid()
         {
-            return View();
+            return this.View();
         }
 
         public ActionResult D3()
         {
-            return View();
-        }
-
-        public ActionResult BruTile()
-        {
-            return View();
-        }
+            return this.View();
+        } 
     }
 }

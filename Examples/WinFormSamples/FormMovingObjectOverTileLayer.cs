@@ -1,24 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Text;
 using System.Windows.Forms;
 using GeoAPI.Geometries;
 using NetTopologySuite.Geometries;
 using SharpMap.Layers;
-using SharpMap.Data;
-using SharpMap.Styles;
-using SharpMap.Rendering.Thematics;
-using BruTile.Web;
+using BruTile.Predefined;
+
 using WinFormSamples.Properties;
 
-#if DotSpatialProjections
-using GeometryTransform = DotSpatial.Projections.GeometryTransform;
-#else
 using GeometryTransform = GeoAPI.CoordinateSystems.Transformations.GeometryTransform;
-#endif
 
 namespace WinFormSamples
 {
@@ -43,21 +33,13 @@ namespace WinFormSamples
         {
 
             //Lisbon...
-#if DotSpatialProjections
-            var mathTransform = LayerTools.Wgs84toGoogleMercator;
-            var geom = GeometryTransform.TransformBox(
-                new Envelope(-9.205626, -9.123736, 38.690993, 38.740837),
-                mathTransform.Source, mathTransform.Target);
-#else
             var mathTransform = LayerTools.Wgs84toGoogleMercator.MathTransform;
             GeoAPI.Geometries.Envelope geom = GeometryTransform.TransformBox(
                 new Envelope(-9.205626, -9.123736, 38.690993, 38.740837),
                 mathTransform);
-#endif
-
 
             //Google Background
-            TileAsyncLayer layer2 = new TileAsyncLayer(new OsmTileSource(), "TileLayer - OSM");
+            TileAsyncLayer layer2 = new TileAsyncLayer(KnownTileSources.Create(KnownTileSource.OpenStreetMap), "TileLayer - OSM");
 
 
             this.mapBox1.Map.BackgroundLayer.Add(layer2);
@@ -69,7 +51,7 @@ namespace WinFormSamples
             var aux = new List<IGeometry>();
             aux.Add(gf.CreatePoint(geom.Centre));
             staticLayer.Style.Symbol = Resources.PumpSmall;
-            var geoProviderFixed = new SharpMap.Data.Providers.FeatureProvider(aux);
+            var geoProviderFixed = new SharpMap.Data.Providers.GeometryProvider(aux);
             staticLayer.DataSource = geoProviderFixed;
             this.mapBox1.Map.Layers.Add(staticLayer);
 
@@ -79,7 +61,7 @@ namespace WinFormSamples
             position = geom.Centre;
             geos.Add(gf.CreatePoint(position));
             pushPinLayer.Style.Symbol = Resources.OutfallSmall;
-            var geoProvider = new SharpMap.Data.Providers.FeatureProvider(geos);
+            var geoProvider = new SharpMap.Data.Providers.GeometryProvider(geos);
             pushPinLayer.DataSource = geoProvider;
             this.mapBox1.Map.VariableLayers.Add(pushPinLayer);
 

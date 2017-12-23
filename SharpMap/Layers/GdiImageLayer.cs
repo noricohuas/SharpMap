@@ -157,7 +157,7 @@ namespace SharpMap.Layers
         /// </summary>
         /// <param name="g">Graphics object reference</param>
         /// <param name="map">Map which is rendered</param>
-        public override void Render(Graphics g, Map map)
+        public override void Render(Graphics g, MapViewport map)
         {
             if (map.Center == null)
                 throw (new ApplicationException("Cannot render map. View center not specified"));
@@ -165,13 +165,7 @@ namespace SharpMap.Layers
             if (_image == null)
                 throw new Exception("Image not set");
 
-            // Style enabled?
-            var doRender = Style.Enabled;
-
-            // Valid for this zoom
-            if (map.Zoom < Style.MinVisible || Style.MaxVisible < map.Zoom)
-                doRender = false;
-
+        
             // View to render
             var mapView = map.Envelope;
             
@@ -180,7 +174,7 @@ namespace SharpMap.Layers
 
             // Get the view intersection
             var vi = mapView.Intersection(lyrView);
-            if (doRender && !vi.IsNull)
+            if (!vi.IsNull)
             {
                 // Image part
 // ReSharper disable InconsistentNaming

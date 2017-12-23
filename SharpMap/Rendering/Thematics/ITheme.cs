@@ -15,7 +15,6 @@
 // along with SharpMap; if not, write to the Free Software
 // Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 
-using GeoAPI.Features;
 using SharpMap.Data;
 using SharpMap.Styles;
 
@@ -24,13 +23,18 @@ namespace SharpMap.Rendering.Thematics
     /// <summary>
     /// Interface for rendering a thematic layer
     /// </summary>
+    /// <remarks>
+    /// Implementations of this interface should consider implementing <see cref="T:System.ICloneable"/> 
+    /// when they make use of <see cref="T:System.Drawing.Pen"/>, <see cref="T:System.Drawing.Brush"/> or likewise 
+    /// objects of the <see cref="N:System.Drawing"/> namespace. Otherwise they are prone to GDI+ rendering exceptions.
+    /// </remarks>
     public interface ITheme
     {
         /// <summary>
         /// Returns the style based on a feature
         /// </summary>
-        /// <param name="feature">Set of attribute values to calculate the <see cref="IStyle"/> from</param>
+        /// <param name="attribute">Set of attribute values to calculate the <see cref="IStyle"/> from</param>
         /// <returns>The style</returns>
-        IStyle GetStyle(IFeature feature);
+        IStyle GetStyle(FeatureDataRow attribute);
     }
 }

@@ -17,7 +17,7 @@
 #if DEBUG
 
 using System;
-using System.Configuration;
+//using System.Configuration;
 using System.Data;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -32,6 +32,7 @@ namespace SharpMap.Data.Providers
     [TestFixture]
     public class FileGdbProviderTest
     {
+        /*
         [Test]
         public void TestEnsureNativePathSet()
         {
@@ -44,6 +45,7 @@ namespace SharpMap.Data.Providers
             Assert.IsFalse(string.IsNullOrEmpty(path));
             Assert.IsTrue(path.Contains(fileGdbPath));
         }
+        */
 
         [Test]
         public void TestSampleSources()
@@ -127,7 +129,7 @@ namespace SharpMap.Data.Providers
 
             m.ZoomToExtents();
             var b = m.GetMap();
-            b.Save("fgdb-usa-states.bmp");
+            b.Save("fgdb-usa-states.png");
             
             //var fds = new FeatureDataSet();
             //lc.ExecuteIntersectionQuery(m.GetExtents().GetCentroid(), fds);

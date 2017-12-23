@@ -1,16 +1,9 @@
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using GeoAPI;
-using GeoAPI.Features;
+using System.Runtime.CompilerServices;
 using GeoAPI.Geometries;
-#if !DotSpatialProjections
-using GeoAPI.CoordinateSystems.Transformations;
-#else
-using DotSpatial.Projections;
-#endif
 using SharpMap.Data;
 using SharpMap.Data.Providers;
 using SharpMap.Rendering.Symbolizer;
@@ -31,7 +24,7 @@ namespace SharpMap.Layers.Symbolizer
 
         private readonly object _dataSourceLock = new object();
         private IProvider _dataSource;
-        private List<IGeometry> _geometries;
+        private Collection<IGeometry> _geometries;
 
         #endregion
 
@@ -85,7 +78,8 @@ namespace SharpMap.Layers.Symbolizer
         /// </summary>
         /// <param name="g">The graphics object</param>
         /// <param name="map">The map</param>
-        public override void Render(Graphics g, Map map)
+        [MethodImpl(MethodImplOptions.Synchronized)]
+        public override void Render(Graphics g, MapViewport map)
         {
             // Map setup correctly
             if (map.Center == null)
@@ -130,13 +124,8 @@ namespace SharpMap.Layers.Symbolizer
                     if (!wasOpen) //Restore state
                         _dataSource.Close();
                 }
-                if (CoordinateTransformation != null)
-#if !DotSpatialProjections
-                    return GeometryTransform.TransformBox(box, CoordinateTransformation.MathTransform);
-#else
-                    return GeometryTransform.TransformBox(box, CoordinateTransformation.Source, CoordinateTransformation.Target);
-#endif
-                return box;
+
+                return ToTarget(box);
             }
         }
 
@@ -145,36 +134,17 @@ namespace SharpMap.Layers.Symbolizer
         /// </summary>
         /// <param name="graphics">The graphics object to render upon</param>
         /// <param name="map">The map</param>
-        protected virtual void OnRender(Graphics graphics, Map map)
+        protected virtual void OnRender(Graphics graphics, MapViewport map)
         {
             // Get query envelope
-            var envelope = map.Envelope;
-
-            // Convert bounding box to datasource's coordinate system
-            if (CoordinateTransformation != null)
-            {
-#if !DotSpatialProjections
-                if (ReverseCoordinateTransformation != null)
-                {
-                    envelope = GeometryTransform.TransformBox(envelope, ReverseCoordinateTransformation.MathTransform);
-                }
-                else
-                {
-                    CoordinateTransformation.MathTransform.Invert();
-                    envelope = GeometryTransform.TransformBox(envelope, CoordinateTransformation.MathTransform);
-                    CoordinateTransformation.MathTransform.Invert();
-                }
-#else
-                envelope = GeometryTransform.TransformBox(envelope, CoordinateTransformation.Target, CoordinateTransformation.Source);
-#endif
-            }
+            var envelope = ToSource(map.Envelope);
 
             lock (_dataSource)
             {
                 var wasOpen = _dataSource.IsOpen;
                 if (!_dataSource.IsOpen) _dataSource.Open();
 
-                _geometries = new List<IGeometry>(DataSource.GetGeometriesInView(envelope));
+                _geometries = DataSource.GetGeometriesInView(envelope);
 
                 if (logger.IsDebugEnabled)
                     logger.DebugFormat("Layer {0}, NumGeometries {1}", LayerName, _geometries.Count);
@@ -192,12 +162,15 @@ namespace SharpMap.Layers.Symbolizer
         /// </summary>
         /// <param name="graphics">The graphics object to render upon</param>
         /// <param name="map">The map</param>
-        protected virtual void OnRendering(Graphics graphics, Map map)
+        protected virtual void OnRendering(Graphics graphics, MapViewport map)
         {
             foreach (var geometry in _geometries)
             {
                 if (geometry != null)
-                    Symbolizer.Render(map, geometry as TGeometry, graphics);
+                {
+                    var tmpGeometry = ToTarget(geometry);
+                    Symbolizer.Render(map, tmpGeometry as TGeometry, graphics);
+                }
             }
             Symbolizer.Symbolize(graphics, map);
         }
@@ -207,9 +180,10 @@ namespace SharpMap.Layers.Symbolizer
         /// </summary>
         /// <param name="graphics">The graphics object to render upon</param>
         /// <param name="map">The map</param>
-        protected virtual void OnRendered(Graphics graphics, Map map)
+        protected virtual void OnRendered(Graphics graphics, MapViewport map)
         {
             Symbolizer.End(graphics, map);
+            _geometries = null;
         }
 
         /// <summary>
@@ -236,25 +210,9 @@ namespace SharpMap.Layers.Symbolizer
         /// </summary>
         /// <param name="box">Geometry to intersect with</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(Envelope box, IFeatureCollectionSet ds)
+        public void ExecuteIntersectionQuery(Envelope box, FeatureDataSet ds)
         {
-            if (CoordinateTransformation != null)
-            {
-#if !DotSpatialProjections
-                if (ReverseCoordinateTransformation != null)
-                {
-                    box = GeometryTransform.TransformBox(box, ReverseCoordinateTransformation.MathTransform);
-                }
-                else
-                {
-                    CoordinateTransformation.MathTransform.Invert();
-                    box = GeometryTransform.TransformBox(box, CoordinateTransformation.MathTransform);
-                    CoordinateTransformation.MathTransform.Invert();
-                }
-#else
-                box = GeometryTransform.TransformBox(box, CoordinateTransformation.Target, CoordinateTransformation.Source);
-#endif
-            }
+            box = ToSource(box);
 
             lock (_dataSource)
             {
@@ -269,30 +227,9 @@ namespace SharpMap.Layers.Symbolizer
         /// </summary>
         /// <param name="geometry">Geometry to intersect with</param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        public void ExecuteIntersectionQuery(IGeometry geometry, IFeatureCollectionSet ds)
+        public void ExecuteIntersectionQuery(IGeometry geometry, FeatureDataSet ds)
         {
-            if (CoordinateTransformation != null)
-            {
-#if !DotSpatialProjections
-                if (ReverseCoordinateTransformation != null)
-                {
-                    geometry = GeometryTransform.TransformGeometry(geometry, ReverseCoordinateTransformation.MathTransform,
-                            GeometryServiceProvider.Instance.CreateGeometryFactory((int)ReverseCoordinateTransformation.TargetCS.AuthorityCode));
-                }
-                else
-                {
-                    CoordinateTransformation.MathTransform.Invert();
-                    geometry = GeometryTransform.TransformGeometry(geometry, CoordinateTransformation.MathTransform,
-                            GeometryServiceProvider.Instance.CreateGeometryFactory((int)CoordinateTransformation.SourceCS.AuthorityCode));
-                    CoordinateTransformation.MathTransform.Invert();
-                }
-#else
-                geometry = GeometryTransform.TransformGeometry(geometry, 
-                    CoordinateTransformation.Target, 
-                    CoordinateTransformation.Source, 
-                    CoordinateTransformation.SourceFactory);
-#endif
-            }
+            geometry = ToSource(geometry);
 
             lock (_dataSource)
             {

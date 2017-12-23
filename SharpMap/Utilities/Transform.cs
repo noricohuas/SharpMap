@@ -26,6 +26,24 @@ namespace SharpMap.Utilities
     public class Transform
     {
         /// <summary>
+        /// Transforms from image coordinates to world coordinate system (WCS).
+        /// NOTE: This method DOES NOT take the MapTransform property into account (use <see cref="Map.ImageToWorld(System.Drawing.PointF,bool)"/> instead)
+        /// </summary>
+        /// <param name="p">Point in image coordinate system</param>
+        /// <param name="map">Map reference</param>
+        /// <returns>Point in WCS</returns>
+        public static Coordinate MapToWorld(PointF p, MapViewport map)
+        {
+            if (map.Center.IsEmpty() || double.IsNaN(map.MapHeight))
+            {
+                return new Coordinate(0, 0);
+            }
+            var ul = new Coordinate(map.Center.X - map.Zoom * .5, map.Center.Y + map.MapHeight * .5);
+            return new Coordinate(ul.X + p.X * map.PixelWidth,
+                                  ul.Y - p.Y * map.PixelHeight);
+        }
+
+        /// <summary>
         /// Transforms from world coordinate system (WCS) to image coordinates
         /// NOTE: This method DOES NOT take the MapTransform property into account (use <see cref="Map.WorldToImage(GeoAPI.Geometries.Coordinate,bool)"/> instead)
         /// </summary>

@@ -25,13 +25,12 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Data.Common;
-using System.Threading;
 using Common.Logging;
-using GeoAPI.Features;
 using GeoAPI.Geometries;
 using NetTopologySuite.IO;
 using Npgsql;
 using System.Globalization;
+using NpgsqlTypes;
 
 namespace SharpMap.Data.Providers
 {
@@ -69,7 +68,7 @@ namespace SharpMap.Data.Providers
     [Serializable]
     public class PostGIS : BaseProvider
     {
-        private static readonly ILog Logger = LogManager.GetCurrentClassLogger();
+        private static readonly ILog Logger = LogManager.GetLogger<PostGIS>();
         
         private string _definitionQuery;
         private string _geometryColumn;
@@ -292,7 +291,7 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="bbox"></param>
         /// <returns></returns>
-        public override IEnumerable<IGeometry> GetGeometriesInView(Envelope bbox, CancellationToken? ct = null)
+        public override Collection<IGeometry> GetGeometriesInView(Envelope bbox)
         {
             var features = new Collection<IGeometry>();
             using (var conn = new NpgsqlConnection(ConnectionString))
@@ -341,7 +340,7 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="oid">Object ID</param>
         /// <returns>The geometry</returns>
-        public override IGeometry GetGeometryByOid(object oid)
+        public override IGeometry GetGeometryByID(uint oid)
         {
             IGeometry geom = null;
             using (var conn = new NpgsqlConnection(ConnectionString))
@@ -349,14 +348,13 @@ namespace SharpMap.Data.Providers
                 conn.Open();
 
                 var strSQL = "SELECT \"" + GeometryColumn + "\"" + _geometryCast + "::bytea AS \"_smGeom_\" FROM " + QualifiedTable +
-                             " WHERE \"" + ObjectIdColumn + "\"=:POid;";
+                             " WHERE \"" + ObjectIdColumn + "\"=" + oid + ";";
 
                 if (Logger.IsDebugEnabled)
-                    Logger.Debug(string.Format("{0}\n{1}", "GetGeometryByOid: executing sql:", strSQL));
+                    Logger.Debug(string.Format("{0}\n{1}", "GetGeometryByID: executing sql:", strSQL));
 
                 using (var command = new NpgsqlCommand(strSQL, conn))
                 {
-                    command.Parameters.Add(new NpgsqlParameter("POid", oid));
                     using (var dr = command.ExecuteReader())
                     {
                         var reader = new PostGisReader(Factory);
@@ -376,8 +374,9 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="bbox">The view envelope</param>
         /// <returns>A collection of ids</returns>
-        public override IEnumerable<object> GetOidsInView(Envelope bbox, CancellationToken? ct = null)
+        public override Collection<uint> GetObjectIDsInView(Envelope bbox)
         {
+            var objectlist = new Collection<uint>();
             using (var conn = new NpgsqlConnection(ConnectionString))
             {
                 conn.Open();
@@ -394,7 +393,7 @@ namespace SharpMap.Data.Providers
                     strSQL += "\"" + GeometryColumn + "\" && " + GetBoxClause(bbox);
 
                 if (Logger.IsDebugEnabled)
-                    Logger.Debug(string.Format("{0}\n{1}", "GetOidsInView: executing sql:", strSQL));
+                    Logger.Debug(string.Format("{0}\n{1}", "GetObjectIDsInView: executing sql:", strSQL));
 
                 var cmd = new NpgsqlCommand(strSQL, conn);
 
@@ -404,10 +403,12 @@ namespace SharpMap.Data.Providers
                     {
                         if (dr[0] == DBNull.Value) 
                             continue;
-                        yield return dr[0];
+                        var id = (uint) (int) dr[0];
+                        objectlist.Add(id);
                     }
                 }
             }
+            return objectlist;
         }
 
         private FeatureDataTable CreateTableFromReader(DbDataReader reader, int geomIndex)
@@ -428,7 +429,7 @@ namespace SharpMap.Data.Providers
         /// </summary>
         /// <param name="geom"></param>
         /// <param name="ds">FeatureDataSet to fill data into</param>
-        protected override void OnExecuteIntersectionQuery(IGeometry geom, IFeatureCollectionSet fcs, CancellationToken? ct = null)
+        protected override void OnExecuteIntersectionQuery(IGeometry geom, FeatureDataSet ds)
         {
             GetNonSpatialColumns();
 
@@ -436,7 +437,7 @@ namespace SharpMap.Data.Providers
             {
                 conn.Open();
 
-                var strSql = "SELECT " + _columns + ", \"" + GeometryColumn + "\" AS \"_smtmp_\" ";
+                var strSql = "SELECT " + _columns + ", \"" + GeometryColumn + "\"::bytea AS \"_smtmp_\" ";
                 strSql += "FROM " + Table + " WHERE ";
 
                 // Attribute constraint
@@ -475,7 +476,10 @@ namespace SharpMap.Data.Providers
                 using (var cmd = new NpgsqlCommand(strSql, conn))
                 {
                     geom.SRID = SRID;
-                    cmd.Parameters.AddWithValue("PGeo", new PostGisWriter().Write(geom));
+                    var par = new NpgsqlParameter("PGeo", NpgsqlDbType.Bytea);
+                    par.NpgsqlValue = new PostGisWriter().Write(geom);
+                    cmd.Parameters.Add(par);
+                    //cmd.Parameters.AddWithValue("PGeo", new PostGisWriter().Write(geom));
                     using (var reader = cmd.ExecuteReader())
                     {
                         var geomIndex = reader.FieldCount - 1;
@@ -503,7 +507,7 @@ namespace SharpMap.Data.Providers
                             fdr.Geometry = g;
                         }
                         fdt.EndLoadData();
-                        fcs.Add(fdt);
+                        ds.Tables.Add(fdt);
                     }
                 }
             }
@@ -531,20 +535,19 @@ namespace SharpMap.Data.Providers
         /// <summary>
         /// Returns a datarow based on a RowID
         /// </summary>
-        /// <param name="oid"></param>
+        /// <param name="rowId"></param>
         /// <returns>datarow</returns>
-        public override IFeature GetFeatureByOid(object oid)
+        public override FeatureDataRow GetFeature(uint rowId)
         {
             GetNonSpatialColumns();
             using (var conn = new NpgsqlConnection(ConnectionString))
             {
                 conn.Open();
                 var strSql = "SELECT " + _columns + ", \"" + GeometryColumn + "\"" + _geometryCast + "::bytea AS \"_smtmp_\" ";
-                strSql += "FROM " + QualifiedTable + " WHERE \"" + ObjectIdColumn +"\" = :POid";
+                strSql += "FROM " + QualifiedTable + " WHERE \"" + ObjectIdColumn +"\" = " + rowId;
 
                 using (var cmd = new NpgsqlCommand(strSql, conn))
                 {
-                    cmd.Parameters.Add(new NpgsqlParameter("POid", oid));
                     using (var reader = cmd.ExecuteReader())
                     {
                         if (reader.HasRows)
@@ -629,8 +632,8 @@ namespace SharpMap.Data.Providers
         /// Returns all features with the view box
         /// </summary>
         /// <param name="bbox">view box</param>
-        /// <param name="fcs">FeatureDataSet to fill data into</param>
-        public override void ExecuteIntersectionQuery(Envelope bbox, IFeatureCollectionSet fcs, CancellationToken? ct = null)
+        /// <param name="ds">FeatureDataSet to fill data into</param>
+        public override void ExecuteIntersectionQuery(Envelope bbox, FeatureDataSet ds)
         {
             GetNonSpatialColumns();
             //List<Geometry> features = new List<Geometry>();
@@ -686,7 +689,7 @@ namespace SharpMap.Data.Providers
                             fdr.Geometry = g;
                         }
                         fdt.EndLoadData();
-                        fcs.Add(fdt);
+                        ds.Tables.Add(fdt);
                     }
                 }
             }

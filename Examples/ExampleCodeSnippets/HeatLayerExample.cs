@@ -2,8 +2,6 @@
 using System.Data;
 using System.Drawing;
 using System.Drawing.Imaging;
-using BruTile.Web;
-using DotSpatial.Projections;
 using GeoAPI.Geometries;
 using NUnit.Framework;
 using NetTopologySuite;
@@ -28,7 +26,7 @@ namespace ExampleCodeSnippets
                 CreatingData.GetRandomOrdinates(150, 52, 53), null,
                 CreatingData.GetRandomOrdinates(150, 0, 1));
 
-            var p = new SharpMap.Data.Providers.FeatureProvider(data);
+            var p = new SharpMap.Data.Providers.GeometryFeatureProvider(data);
             var l = new HeatLayer(p, "Data");
 
             m.Layers.Add(l);
@@ -46,29 +44,19 @@ namespace ExampleCodeSnippets
             var fdt = GetRealFeatureDataTable();
             FillRealDataTable(fdt);
 
-            var p = new SharpMap.Data.Providers.FeatureProvider(fdt);
+            var p = new SharpMap.Data.Providers.GeometryFeatureProvider(fdt);
 
 
             var m = new SharpMap.Map(new Size(640, 640));
-            m.Layers.Add(new TileLayer(
-                new OsmTileSource(new OsmRequest(KnownTileServers.Mapnik) /*, 
-                                  new FileCache(@"d:\temp\OSM", "png")*/), "OSM"));
+            m.Layers.Add(new TileLayer(BruTile.Predefined.KnownTileSources.Create(), "OSM"));
 
             var l = new HeatLayer(p, "Data", 0.001f);
             l.LayerName = "HEAT";
             m.Layers.Add(l);
-#if DotSpatialProjections
-            l.CoordinateTransformation = new DotSpatial.Projections.CoordinateTransformation
-            {
-                Source = ProjectionInfo.FromEpsgCode(4326), 
-                Target = ProjectionInfo.FromEpsgCode(3857)
-            };
-#else
             var ctfac = new ProjNet.CoordinateSystems.Transformations.CoordinateTransformationFactory();
             l.CoordinateTransformation =
                 ctfac.CreateFromCoordinateSystems(ProjNet.CoordinateSystems.GeographicCoordinateSystem.WGS84,
                                                   ProjNet.CoordinateSystems.ProjectedCoordinateSystem.WebMercator);
-#endif
             l.ZoomMin = 0;// 0.01 * m.GetExtents().Width;
             l.ZoomMax = /*0.9 * */m.GetExtents().Width;
             l.OpacityMax = 1;
